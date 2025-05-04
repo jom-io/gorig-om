@@ -19,7 +19,13 @@ Gorig-OM is the operations management panel for the [Gorig](https://github.com/j
 
 ### 1. Installation
 
-Add the following configuration to your Gorig project:
+First, install the package:
+
+```bash
+go get github.com/jom-io/gorig-om@latest
+```
+
+Then, add the following configuration to your Gorig project:
 
 ```yaml
 om:
@@ -67,7 +73,13 @@ Gorig-OM 是 [Gorig](https://github.com/jom-io/gorig) 项目的运维管理面�
 
 ### 1. 安装
 
-在您的 Gorig 项目中添加以下配置：
+首先，安装包：
+
+```bash
+go get github.com/jom-io/gorig-om@latest
+```
+
+然后，在您的 Gorig 项目中添加以下配置：
 
 ```yaml
 om:
