@@ -1,0 +1,65 @@
+package src
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/jom-io/gorig-om/src/deploy/app"
+	dpGit "github.com/jom-io/gorig-om/src/deploy/git"
+	dpTask "github.com/jom-io/gorig-om/src/deploy/task"
+	"github.com/jom-io/gorig-om/src/logtool"
+	"github.com/jom-io/gorig-om/src/mid"
+	"github.com/jom-io/gorig-om/src/omuser"
+	"github.com/jom-io/gorig/global/variable"
+	"github.com/jom-io/gorig/httpx"
+)
+
+func init() {
+	if variable.OMKey == "" {
+		return
+	}
+	httpx.RegisterRouter(func(groupRouter *gin.RouterGroup) {
+		om := groupRouter.Group("om")
+		auth := om.Group("auth")
+		auth.POST("connect", omuser.Login)
+		om.Use(mid.Sign())
+		log := om.Group("log")
+		log.GET("categories", logtool.GetCategories)
+		log.GET("levels", logtool.GetLevels)
+		log.POST("search", logtool.Search)
+		log.GET("near", logtool.Near)
+		log.GET("monitor", logtool.Monitor)
+		log.GET("download", logtool.Download)
+
+		//git.POST("auto", auto)
+
+		deploy := om.Group("deploy")
+		git := deploy.Group("git")
+		git.GET("check", dpGit.CheckGit)
+		git.POST("install", dpGit.Install)
+		deploy.GET("branches", dpGit.Branches)
+
+		//deploy.GET("repository", dpGit.GetRepo)
+		//deploy.POST("repository", dpGit.SetRepo)
+
+		//deploy.POST("branch", dpGit.BranchSet)
+		//deploy.GET("branch", dpGit.BranchGet)
+
+		deploy.GET("ssh/key", dpGit.GetSSHKey)
+		deploy.POST("ssh/key", dpGit.GenSSHKey)
+
+		deploy.POST("restart", app.Restart)
+		deploy.POST("stop", app.Stop)
+
+		task := deploy.Group("task")
+		task.GET("config", dpTask.GetConfig)
+		task.POST("config", dpTask.SaveConfig)
+		task.POST("start", dpTask.Start)
+		task.GET("page", dpTask.Page)
+		task.GET("get", dpTask.Get)
+		task.POST("rollback", dpTask.Rollback)
+
+		//env := om.Group("env")
+		//env.GET("cpu", host.Cpu)
+		//env.GET("disk", disk)
+		//env.GET("mem", mem)
+	})
+}

@@ -1,0 +1,66 @@
+# Binaries and other executable files
+/bin/
+/pkg/
+/vendor/
+
+# Output of the Go build process
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Ignore profile files that may be created
+cpu.out
+mem.out
+trace.out
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# If using dotenv for configuration, ignore the environment file
+.env
+
+
+# Ignore everything
+*.sh
+*.log
+*.jsonl
+.logs
+_bin/
+*.yaml
+*.pem
+*.crt
+/test/output/
+*.html
+*.json
+*.cache
+.deploy
+*.linux64
+
+# Go workspace file
+go.work
+go.work.sum
+
+
+# env file
