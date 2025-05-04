@@ -32,7 +32,26 @@ om:
   key: "your-access-key-here"  # Set access password
 ```
 
-### 2. Access Panel
+### 2. Enable OM
+
+You can enable the operations management panel in one of two ways:
+
+1. Import the package in your main.go:
+```go
+import _ "github.com/jom-io/gorig-om/src"
+```
+
+2. Or call the setup function in your code:
+```go
+import "github.com/jom-io/gorig-om/src"
+
+func main() {
+    om.Setup()
+    // ... your other code
+}
+```
+
+### 3. Access Panel
 
 After configuration, you can access the operations panel at:
 
@@ -86,7 +105,26 @@ om:
   key: "your-access-key-here"  # 设置访问密码
 ```
 
-### 2. 访问面板
+### 2. 启用 OM
+
+您可以通过以下两种方式之一启用运维管理面板：
+
+1. 在 main.go 中导入包：
+```go
+import _ "github.com/jom-io/gorig-om/src"
+```
+
+2. 或在代码中调用设置函数：
+```go
+import "github.com/jom-io/gorig-om/src"
+
+func main() {
+    om.Setup()
+    // ... 其他代码
+}
+```
+
+### 3. 访问面板
 
 配置完成后，您可以通过以下地址访问运维面板：
 

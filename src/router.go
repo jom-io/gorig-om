@@ -1,4 +1,4 @@
-package src
+package om
 
 import (
 	"github.com/gin-gonic/gin"
@@ -13,6 +13,10 @@ import (
 )
 
 func init() {
+	Setup()
+}
+
+func Setup() {
 	if variable.OMKey == "" {
 		return
 	}
