@@ -162,7 +162,7 @@ func (c gitService) GenSSHKey(ctx context.Context) SshKey {
 		return sshKey
 	}
 
-	sshPath := filepath.Join(homeDir, ".ssh", "id_rsa.pub")
+	sshPath := filepath.Join(homeDir, ".ssh", "id_rsa")
 
 	if _, errExist := os.Stat(sshPath); os.IsNotExist(errExist) {
 		hostname, errH := deploy.RunCommand(ctx, "hostname")
