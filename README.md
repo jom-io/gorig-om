@@ -69,13 +69,13 @@ Use the `om.key` you set in the configuration for access authentication.
 
 - [Gorig](https://github.com/jom-io/gorig) - Main project repository
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
-
 ## Credits
 
 The admin panel UI is built using [Slash Admin](https://github.com/d3george/slash-admin).
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
 
 ---
 
@@ -146,10 +146,10 @@ func main() {
 
 - [Gorig](https://github.com/jom-io/gorig) - 主项目仓库
 
-## 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
 ## 致谢
 
-管理面板 UI 基于 [Slash Admin](https://github.com/d3george/slash-admin) 实现。 
+管理面板 UI 基于 [Slash Admin](https://github.com/d3george/slash-admin) 实现。
+
+## 许可证
+
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件 
