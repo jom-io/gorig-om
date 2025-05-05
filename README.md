@@ -73,6 +73,10 @@ Use the `om.key` you set in the configuration for access authentication.
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
 
+## Credits
+
+The admin panel UI is built using [Slash Admin](https://github.com/d3george/slash-admin).
+
 ---
 
 <a id="chinese"></a>
@@ -144,4 +148,8 @@ func main() {
 
 ## 许可证
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件 
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+
+## 致谢
+
+管理面板 UI 基于 [Slash Admin](https://github.com/d3george/slash-admin) 实现。 
