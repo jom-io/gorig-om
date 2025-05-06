@@ -7,7 +7,7 @@ toolchain go1.23.4
 require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gin-gonic/gin v1.9.1
-	github.com/jom-io/gorig v0.0.36
+	github.com/jom-io/gorig v0.0.37
 	github.com/rs/xid v1.5.0
 	github.com/spf13/cast v1.6.0
 	go.uber.org/zap v1.27.0
