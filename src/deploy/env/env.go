@@ -211,7 +211,7 @@ func (c envService) CheckGoEnv(ctx context.Context) EnvVersion {
 	}
 	result, err := deploy.RunCommand(ctx, "go", "version")
 	if err != nil {
-		goVersion.Error = fmt.Sprintf("Go check failed, result:%v,err:%v", result, err)
+		goVersion.Error = fmt.Sprintf("Go check, result:%v,err:%v", result, err)
 		logger.Warn(ctx, goVersion.Error)
 		goVersion.Installed = false
 	}
@@ -225,7 +225,9 @@ func (c envService) CheckGoEnv(ctx context.Context) EnvVersion {
 			logger.Warn(ctx, goVersion.Error)
 		}
 	} else {
-		goVersion.Error = fmt.Sprintf("Go version check failed, result:%v", result)
+		if goVersion.Error == "" {
+			goVersion.Error = fmt.Sprintf("Go version not found %s", result)
+		}
 		logger.Warn(ctx, goVersion.Error)
 		goVersion.Installed = false
 		return goVersion
