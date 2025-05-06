@@ -6,6 +6,7 @@ import (
 	"github.com/jom-io/gorig-om/src/deploy"
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,7 +112,19 @@ func (c envService) Branches(ctx context.Context, repoURL string) ([]string, *er
 	// git", "ls-remote", "--heads", repoURL
 	branches, errR := deploy.RunCommand(ctx, "git", "ls-remote", "--heads", repoURL)
 	if errR != nil {
-		return nil, errors.Verify("Failed to list branches", errR)
+		if strings.Contains(errR.Error(), "Host key verification failed") {
+			logger.Warn(ctx, "Host key verification failed, trying to trust host...")
+			host := c.extractGitHost(repoURL)
+			if host != "" {
+				if err := c.trustHost(ctx, host); err != nil {
+					return nil, errors.Verify("Failed to trust host", err)
+				}
+				branches, errR = deploy.RunCommand(ctx, "git", "ls-remote", "--heads", repoURL)
+			}
+		}
+		if errR != nil {
+			return nil, errors.Verify("Failed to list branches", errR)
+		}
 	}
 
 	branchList := strings.Split(branches, "\n")
@@ -129,6 +142,30 @@ func (c envService) Branches(ctx context.Context, repoURL string) ([]string, *er
 
 	logger.Info(ctx, fmt.Sprintf("Branches found: %v", branchNames))
 	return branchNames, nil
+}
+
+func (c envService) trustHost(ctx context.Context, host string) error {
+	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("ssh-keyscan %s >> ~/.ssh/known_hosts", host))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ssh-keyscan error: %v\noutput: %s", err, out)
+	}
+	return nil
+}
+
+func (c envService) extractGitHost(repoURL string) string {
+	if strings.HasPrefix(repoURL, "git@") {
+		// git@github.com:hootuu/ninepay.git
+		if parts := strings.Split(repoURL, "@"); len(parts) == 2 {
+			if hostPath := strings.SplitN(parts[1], ":", 2); len(hostPath) == 2 {
+				return hostPath[0]
+			}
+		}
+	}
+	if u, err := url.Parse(repoURL); err == nil {
+		return u.Hostname()
+	}
+	return ""
 }
 
 // GetSSHKey retrieves the SSH key for the git repository
@@ -209,7 +246,7 @@ func (c envService) CheckGoEnv(ctx context.Context) EnvVersion {
 	goVersion := EnvVersion{
 		Installed: true,
 	}
-	result, err := deploy.RunCommand(ctx, "go", "version")
+	result, err := deploy.RunCommandLog(ctx, "go", "version")
 	if err != nil {
 		goVersion.Error = fmt.Sprintf("Go check, result:%v,err:%v", result, err)
 		logger.Warn(ctx, goVersion.Error)
@@ -264,15 +301,16 @@ sudo tar -C /usr/local -xzf go%s.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh > /dev/null
 sudo chmod +x /etc/profile.d/go.sh
 source /etc/profile.d/go.sh
+sudo rm -rf go%s.linux-amd64.*
 go version
-`, GOVersion, GOVersion)
+`, GOVersion, GOVersion, GOVersion)
 
-	output, err := deploy.RunCommand(ctx, "bash", "-c", cmd)
+	output, err := deploy.RunCommandLog(ctx, "bash", "-c", cmd)
 	if err != nil {
 		return EnvVersion{}, errors.Verify(fmt.Sprintf("output:%s \n err:%v", output, err))
 	}
 
-	return c.CheckGit(ctx), nil
+	return c.CheckGoEnv(ctx), nil
 }
 
 // versionCompare compares two version strings and returns: 1 if version1 > version2, -1 if version1 < version2, and 0 if they are equal.

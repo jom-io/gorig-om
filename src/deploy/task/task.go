@@ -294,7 +294,11 @@ func (t taskService) clone(ctx context.Context, codeDir string, item *TaskRecord
 
 	// commit git log -1 --pretty=%B
 	//item.Running(fmt.Sprintf("Getting commit message..."))
-	if commit, err := deploy.RunCommand(ctx, "git", "-C", codeDir, "log", "-1", "--pretty=%B"); err != nil {
+	env := []string{
+		fmt.Sprintf("GIT_DIR=%s/.git", codeDir),
+		fmt.Sprintf("GIT_WORK_TREE=%s", codeDir),
+	}
+	if commit, err := deploy.RunCommandEnv(ctx, env, "git", "log", "-1", "--pretty=%B"); err != nil {
 		item.Running(fmt.Sprintf("Error getting commit message: %v", err), Error)
 		return
 	} else {
