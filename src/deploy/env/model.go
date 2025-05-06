@@ -1,6 +1,6 @@
 package deploy
 
-type GitVersion struct {
+type EnvVersion struct {
 	Installed bool   `json:"installed"`
 	Version   string `json:"version"`
 	Error     string `json:"error"`

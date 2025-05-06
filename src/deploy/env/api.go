@@ -8,13 +8,13 @@ import (
 
 func CheckGit(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
-	result := Git.CheckGit(ctx)
+	result := Env.CheckGit(ctx)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
 }
 
 func Install(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
-	result := Git.InstallGit(ctx)
+	result := Env.InstallGit(ctx)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, result, nil)
 }
 
@@ -24,18 +24,30 @@ func Branches(ctx *gin.Context) {
 	if e != nil {
 		return
 	}
-	result, err := Git.Branches(ctx, repoUrl)
+	result, err := Env.Branches(ctx, repoUrl)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, err)
 }
 
 func GetSSHKey(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
-	result := Git.GetSSHKey(ctx)
+	result := Env.GetSSHKey(ctx)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
 }
 
 func GenSSHKey(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
-	result := Git.GenSSHKey(ctx)
+	result := Env.GenSSHKey(ctx)
+	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
+}
+
+func CheckGoEnv(ctx *gin.Context) {
+	defer apix.HandlePanic(ctx)
+	result := Env.CheckGoEnv(ctx)
+	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
+}
+
+func InstallGoEnv(ctx *gin.Context) {
+	defer apix.HandlePanic(ctx)
+	result := Env.InitGoEnv(ctx)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
 }

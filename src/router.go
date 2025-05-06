@@ -3,7 +3,7 @@ package om
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/jom-io/gorig-om/src/deploy/app"
-	dpGit "github.com/jom-io/gorig-om/src/deploy/git"
+	dpGit "github.com/jom-io/gorig-om/src/deploy/env"
 	dpTask "github.com/jom-io/gorig-om/src/deploy/task"
 	"github.com/jom-io/gorig-om/src/logtool"
 	"github.com/jom-io/gorig-om/src/mid"
@@ -40,6 +40,10 @@ func Setup() {
 		git.GET("check", dpGit.CheckGit)
 		git.POST("install", dpGit.Install)
 		deploy.GET("branches", dpGit.Branches)
+
+		goEnv := deploy.Group("go")
+		goEnv.GET("check", dpGit.CheckGoEnv)
+		goEnv.POST("install", dpGit.InstallGoEnv)
 
 		//deploy.GET("repository", dpGit.GetRepo)
 		//deploy.POST("repository", dpGit.SetRepo)

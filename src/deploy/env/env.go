@@ -9,29 +9,31 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
-var Git gitService
+var Env envService
 
-type gitService struct {
+type envService struct {
 }
 
 func init() {
-	Git = gitService{}
+	Env = envService{}
 }
 
 const (
 	GitRepoKey = "git_repo"
 	BranchKey  = "deploy_branch"
+	GOVersion  = "1.23.4"
 )
 
 // CheckGit checks if the git command is available
 // and returns an error if it is not.
-func (c gitService) CheckGit(ctx context.Context) GitVersion {
+func (c envService) CheckGit(ctx context.Context) EnvVersion {
 	logger.Info(ctx, "Checking if git is available...")
-	gitVersion := GitVersion{
+	gitVersion := EnvVersion{
 		Installed: true,
 	}
 	result, err := deploy.RunCommand(ctx, "git", "--version")
@@ -47,7 +49,7 @@ func (c gitService) CheckGit(ctx context.Context) GitVersion {
 }
 
 // InstallGit installs git if it is not already installed
-func (c gitService) InstallGit(ctx context.Context) GitVersion {
+func (c envService) InstallGit(ctx context.Context) EnvVersion {
 	logger.Info(ctx, "Installing git...")
 
 	gitVersion := c.CheckGit(ctx)
@@ -72,7 +74,7 @@ func (c gitService) InstallGit(ctx context.Context) GitVersion {
 	return c.CheckGit(ctx)
 }
 
-func (c gitService) detectPackageManager() string {
+func (c envService) detectPackageManager() string {
 	if _, err := exec.LookPath("apt"); err == nil {
 		return "apt"
 	}
@@ -85,7 +87,7 @@ func (c gitService) detectPackageManager() string {
 	return ""
 }
 
-func (c gitService) installGit(ctx context.Context, manager string) (string, error) {
+func (c envService) installGit(ctx context.Context, manager string) (string, error) {
 
 	switch manager {
 	case "apt":
@@ -103,7 +105,7 @@ func (c gitService) installGit(ctx context.Context, manager string) (string, err
 }
 
 // Branches lists all branches in the git repository
-func (c gitService) Branches(ctx context.Context, repoURL string) ([]string, *errors.Error) {
+func (c envService) Branches(ctx context.Context, repoURL string) ([]string, *errors.Error) {
 	logger.Info(ctx, fmt.Sprintf("Listing branches for repository: %s", repoURL))
 
 	// git", "ls-remote", "--heads", repoURL
@@ -130,7 +132,7 @@ func (c gitService) Branches(ctx context.Context, repoURL string) ([]string, *er
 }
 
 // GetSSHKey retrieves the SSH key for the git repository
-func (c gitService) GetSSHKey(ctx context.Context) SshKey {
+func (c envService) GetSSHKey(ctx context.Context) SshKey {
 	logger.Info(ctx, "Retrieving SSH key for git repository...")
 	sshKey := SshKey{}
 	homeDir, err := os.UserHomeDir()
@@ -153,7 +155,7 @@ func (c gitService) GetSSHKey(ctx context.Context) SshKey {
 }
 
 // GenSSHKey generates a new SSH key for the git repository
-func (c gitService) GenSSHKey(ctx context.Context) SshKey {
+func (c envService) GenSSHKey(ctx context.Context) SshKey {
 	logger.Info(ctx, "Generating new SSH key for git repository...")
 	sshKey := SshKey{}
 	homeDir, err := os.UserHomeDir()
@@ -182,7 +184,7 @@ func (c gitService) GenSSHKey(ctx context.Context) SshKey {
 	return c.GetSSHKey(ctx)
 }
 
-func (c gitService) GetLatestHash(ctx context.Context, repo, branch string) string {
+func (c envService) GetLatestHash(ctx context.Context, repo, branch string) string {
 	//logger.Info(ctx, "Retrieving latest git hash...")
 
 	if repo == "" || branch == "" {
@@ -200,4 +202,97 @@ func (c gitService) GetLatestHash(ctx context.Context, repo, branch string) stri
 	}
 	hash = strings.TrimSpace(hash)
 	return hash
+}
+
+func (c envService) CheckGoEnv(ctx context.Context) EnvVersion {
+	logger.Info(ctx, "Checking if go is available...")
+	goVersion := EnvVersion{
+		Installed: true,
+	}
+	result, err := deploy.RunCommand(ctx, "go", "version")
+	if err != nil {
+		goVersion.Error = fmt.Sprintf("Go check failed, result:%v,err:%v", result, err)
+		logger.Warn(ctx, goVersion.Error)
+		goVersion.Installed = false
+	}
+
+	if strings.Contains(result, "go version") {
+		newResult := strings.TrimPrefix(result, "go version go")
+		newResult = strings.Split(newResult, " ")[0]
+		if versionCompare(newResult, GOVersion) < 0 {
+			goVersion.Error = fmt.Sprintf("Go version is lower than %s, current version: %s", GOVersion, newResult)
+			goVersion.Installed = false
+			logger.Warn(ctx, goVersion.Error)
+		}
+	} else {
+		goVersion.Error = fmt.Sprintf("Go version check failed, result:%v", result)
+		logger.Warn(ctx, goVersion.Error)
+		goVersion.Installed = false
+		return goVersion
+	}
+
+	goVersion.Version = result
+	return goVersion
+}
+
+func (c envService) InitGoEnv(ctx context.Context) EnvVersion {
+	logger.Info(ctx, "Installing go...")
+	goVersion := c.CheckGoEnv(ctx)
+	if goVersion.Installed {
+		logger.Warn(ctx, "Go is already installed")
+		return goVersion
+	}
+
+	if _, err := c.installGo(ctx); err != nil {
+		goVersion.Error = fmt.Sprintf("Failed to install go: %v", err)
+		logger.Warn(ctx, goVersion.Error)
+		return goVersion
+	}
+
+	return c.CheckGoEnv(ctx)
+}
+
+func (c envService) installGo(ctx context.Context) (EnvVersion, *errors.Error) {
+
+	cmd := fmt.Sprintf(`
+set -e
+wget https://dl.google.com/go/go%s.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go%s.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh > /dev/null
+sudo chmod +x /etc/profile.d/go.sh
+source /etc/profile.d/go.sh
+go version
+`, GOVersion, GOVersion)
+
+	output, err := deploy.RunCommand(ctx, "bash", "-c", cmd)
+	if err != nil {
+		return EnvVersion{}, errors.Verify(fmt.Sprintf("output:%s \n err:%v", output, err))
+	}
+
+	return c.CheckGit(ctx), nil
+}
+
+// versionCompare compares two version strings and returns: 1 if version1 > version2, -1 if version1 < version2, and 0 if they are equal.
+func versionCompare(version1, version2 string) int {
+	v1 := strings.Split(version1, ".")
+	v2 := strings.Split(version2, ".")
+
+	for i := 0; i < len(v1) || i < len(v2); i++ {
+		var num1, num2 int
+		if i < len(v1) {
+			num1, _ = strconv.Atoi(v1[i])
+		}
+		if i < len(v2) {
+			num2, _ = strconv.Atoi(v2[i])
+		}
+
+		if num1 < num2 {
+			return -1
+		} else if num1 > num2 {
+			return 1
+		}
+	}
+
+	return 0
 }

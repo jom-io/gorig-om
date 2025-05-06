@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/jom-io/gorig-om/src/deploy"
 	"github.com/jom-io/gorig-om/src/deploy/app"
-	delpoy "github.com/jom-io/gorig-om/src/deploy/git"
+	delpoy "github.com/jom-io/gorig-om/src/deploy/env"
 	"github.com/jom-io/gorig/cache"
 	"github.com/jom-io/gorig/cronx"
 	"github.com/jom-io/gorig/global/variable"
@@ -172,7 +172,7 @@ func autoCheck() {
 		//logger.Info(ctx, "Auto trigger is disabled or options are nil")
 		return
 	}
-	hash := delpoy.Git.GetLatestHash(ctx, opts.Repo, opts.Branch)
+	hash := delpoy.Env.GetLatestHash(ctx, opts.Repo, opts.Branch)
 
 	storage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
 	item, getErr := storage.Get(map[string]any{"gitHash": hash})
@@ -271,7 +271,7 @@ func (t taskService) clone(ctx context.Context, codeDir string, item *TaskRecord
 	}
 
 	item.Running(fmt.Sprintf("Getting latest git hash... "))
-	hash := delpoy.Git.GetLatestHash(ctx, item.Repo, item.Branch)
+	hash := delpoy.Env.GetLatestHash(ctx, item.Repo, item.Branch)
 	item.GitHash = hash
 	item.Running(fmt.Sprintf("Git hash: %s", item.GitHash), Light)
 
