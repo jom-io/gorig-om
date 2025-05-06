@@ -12,23 +12,23 @@ import (
 )
 
 func RunCommandLog(ctx context.Context, cmd string, args ...string) (string, *errors.Error) {
-	return runCommand(ctx, true, "", nil, cmd, args...)
+	return RunCommandAll(ctx, true, "", nil, cmd, args...)
 }
 
 func RunCommand(ctx context.Context, cmd string, args ...string) (string, *errors.Error) {
-	return runCommand(ctx, false, "", nil, cmd, args...)
+	return RunCommandAll(ctx, false, "", nil, cmd, args...)
 }
 
 func RunCommandEnv(ctx context.Context, env []string, cmd string, args ...string) (string, *errors.Error) {
-	return runCommand(ctx, false, "", env, cmd, args...)
+	return RunCommandAll(ctx, false, "", env, cmd, args...)
 }
 
 func RunCommandDir(ctx context.Context, dir string, cmd string, args ...string) (string, *errors.Error) {
-	return runCommand(ctx, false, dir, nil, cmd, args...)
+	return RunCommandAll(ctx, false, dir, nil, cmd, args...)
 }
 
-func runCommand(ctx context.Context, print bool, dir string, env []string, cmd string, args ...string) (string, *errors.Error) {
-	if print {
+func RunCommandAll(ctx context.Context, printLog bool, dir string, env []string, cmd string, args ...string) (string, *errors.Error) {
+	if printLog {
 		logger.Info(ctx, fmt.Sprintf("Running command: %s %s", cmd, strings.Join(args, " ")))
 	}
 	command := exec.Command(cmd, args...)
@@ -48,7 +48,7 @@ func runCommand(ctx context.Context, print bool, dir string, env []string, cmd s
 
 	err := command.Run()
 	if err != nil {
-		if !print {
+		if !printLog {
 			logger.Info(ctx, fmt.Sprintf("Running command: %s %s", cmd, strings.Join(args, " ")))
 		}
 		errInfo := fmt.Sprintf("Command failed: %s\n%s", err.Error(), stderr.String())
@@ -71,7 +71,7 @@ func runCommand(ctx context.Context, print bool, dir string, env []string, cmd s
 	if len(output) > 0 {
 		result = strings.TrimSuffix(result, "\n")
 	}
-	if print {
+	if printLog {
 		logger.Info(ctx, fmt.Sprintf("Command output: %s", result))
 	}
 

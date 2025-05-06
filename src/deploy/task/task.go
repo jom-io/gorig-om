@@ -350,7 +350,10 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 	}
 
 	item.Running(fmt.Sprintf("Running go mod tidy..."))
-	if _, err := deploy.RunCommandDir(ctx, codeDir, "go", "mod", "tidy"); err != nil {
+	env := []string{
+		fmt.Sprintf("GOPROXY=%s", "https://goproxy.cn"),
+	}
+	if _, err := deploy.RunCommandAll(ctx, true, codeDir, env, "go", "mod", "tidy"); err != nil {
 		item.Running(fmt.Sprintf("Error running go mod tidy: %v", err), Error)
 		return
 	} else {
