@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -557,21 +558,47 @@ func (t taskService) CleanBackup() {
 func copyFile(src, dst string) error {
 	from, err := os.Open(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("open src: %w", err)
 	}
 	defer from.Close()
 
 	info, err := from.Stat()
 	if err != nil {
-		return err
+		return fmt.Errorf("stat src: %w", err)
 	}
 
 	to, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-	if err != nil {
+	if err == nil {
+		defer to.Close()
+		_, err = io.Copy(to, from)
 		return err
 	}
-	defer to.Close()
 
-	_, err = io.Copy(to, from)
-	return err
+	// if the file is busy, try to rename it
+	if !ers.Is(err, syscall.ETXTBSY) {
+		return fmt.Errorf("open dst: %w", err)
+	}
+
+	tmp := dst + ".tmp"
+	tmpFile, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return fmt.Errorf("create tmp: %w", err)
+	}
+	defer tmpFile.Close()
+
+	if _, err := io.Copy(tmpFile, from); err != nil {
+		return fmt.Errorf("copy to tmp: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		return fmt.Errorf("sync tmp: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close tmp: %w", err)
+	}
+
+	if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("rename tmp to dst: %w", err)
+	}
+
+	return nil
 }
