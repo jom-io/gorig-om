@@ -12,6 +12,17 @@ func Restart(ctx *gin.Context) {
 	apix.HandleData(ctx, consts.CurdSelectFailCode, nil, err)
 }
 
+func ReStared(ctx *gin.Context) {
+	defer apix.HandlePanic(ctx)
+	id, e := apix.GetParamForce(ctx, "id")
+	itemID, e := apix.GetParamStr(ctx, "itemID")
+	if e != nil {
+		return
+	}
+	App.RestartSuccess(ctx, id, itemID)
+	apix.HandleData(ctx, consts.CurdSelectFailCode, nil, nil)
+}
+
 func Stop(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
 	err := App.Stop(ctx)

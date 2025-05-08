@@ -22,8 +22,15 @@ func Setup() {
 	}
 	httpx.RegisterRouter(func(groupRouter *gin.RouterGroup) {
 		om := groupRouter.Group("om")
+		runApp := om.Group("app")
+		runApp.GET("restarted", app.ReStared)
+		runApp.Use(mid.Sign())
+		runApp.POST("restart", app.Restart)
+		runApp.POST("stop", app.Stop)
+
 		auth := om.Group("auth")
 		auth.POST("connect", omuser.Login)
+
 		om.Use(mid.Sign())
 		log := om.Group("log")
 		log.GET("categories", logtool.GetCategories)
@@ -36,6 +43,7 @@ func Setup() {
 		//git.POST("auto", auto)
 
 		deploy := om.Group("deploy")
+
 		git := deploy.Group("git")
 		git.GET("check", dpGit.CheckGit)
 		git.POST("install", dpGit.Install)
@@ -55,9 +63,6 @@ func Setup() {
 
 		deploy.GET("ssh/key", dpGit.GetSSHKey)
 		deploy.POST("ssh/key", dpGit.GenSSHKey)
-
-		deploy.POST("restart", app.Restart)
-		deploy.POST("stop", app.Stop)
 
 		task := deploy.Group("task")
 		task.GET("config", dpTask.GetConfig)

@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/jom-io/gorig-om/src/deploy"
+	"github.com/jom-io/gorig/cache"
 	"github.com/jom-io/gorig/global/variable"
+	"github.com/jom-io/gorig/mid/messagex"
+	configure "github.com/jom-io/gorig/utils/cofigure"
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
 	"github.com/jom-io/gorig/utils/sys"
+	"github.com/rs/xid"
 	"os"
 	"strings"
 	"time"
@@ -19,8 +23,13 @@ var App appService
 type appService struct {
 }
 
+const startIDKey = "startID"
+
+var watchdogFile string
+
 func init() {
 	App = appService{}
+	watchdogFile = fmt.Sprintf("%s_%s.sh", "watchdog", sys.RunMode)
 }
 
 type RunBack func(log string)
@@ -35,7 +44,7 @@ func getRunFileName() (string, *errors.Error) {
 	return runFile, nil
 }
 
-func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack) *errors.Error {
+func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack, itemIDs ...string) *errors.Error {
 	logger.Info(ctx, "Restarting application...")
 	if runFile == "" {
 		if getFile, e := getRunFileName(); e != nil {
@@ -65,6 +74,18 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 
 	restartFile := "restart.sh"
 
+	startID := xid.New().String()
+	if err = cache.New[string](cache.JSON).Set(startIDKey, startID, 30*time.Second); err != nil {
+		return errors.Verify("Failed to set startID", err)
+	}
+	runBack(fmt.Sprintf("Start ID: %s", startID))
+	port := configure.GetString("api.rest.addr", ":9617")
+	var itemID string
+	if len(itemIDs) > 0 {
+		itemID = itemIDs[0]
+	}
+	reStartAddr := fmt.Sprintf("http://127.0.0.1:%s/om/app/restarted?startID=%s&itemID=%s", port, startID, itemID)
+
 	content := fmt.Sprintf(`#!/bin/bash
 echo "Service restarting..."
 echo "Stopping service..."
@@ -86,30 +107,25 @@ export GORIG_SYS_MODE=%s
 nohup ./%s > nohup.out 2>&1 &
 pid=$!
 echo "Service started with PID: $pid"
-echo "Service restarted."`, runFile, runFile, runFile, sys.RunMode, runFile)
+echo "Checking service startup status..."
+check_timeout=0
+while true; do
+    if curl -sf %s > /dev/null; then
+        echo "Service restarted."
+        break
+    fi
+    check_timeout=$(($check_timeout+1))
+    if [ $check_timeout -ge 120 ]; then
+        echo "Service start failed: Timeout reached."
+        exit 1
+    fi
+    sleep 1
+done
+`, runFile, runFile, runFile, sys.RunMode, runFile, reStartAddr)
 
 	if errW := os.WriteFile(restartFile, []byte(content), 0755); errW != nil {
 		return errors.Verify("Failed to write to restart.sh file", errW)
 	}
-
-	//if _, errW := file.WriteString(content); errW != nil {
-	//	return "", errors.Verify("Failed to write to restart.sh file", errW)
-	//}
-	//// chmod +x
-	//if errCh := os.Chmod(restartFile, 0755); err != nil {
-	//	return "", errors.Verify("Failed to change permissions of restart.sh file", errCh)
-	//}
-	//}
-
-	//runBack("Writing watchdog.sh file...")
-	// Create watchdog script
-	watchdogFile := fmt.Sprintf("%s_%s.sh", "watchdog", sys.RunMode)
-	//if _, err := os.Stat(watchdogFile); os.IsNotExist(err) {
-	//file, errC := os.Create(watchdogFile)
-	//if errC != nil {
-	//	return "", errors.Verify("Failed to create watchdog file", errC)
-	//}
-	//defer file.Close()
 
 	content = fmt.Sprintf(`#!/bin/bash
 echo "Watchdog service started at: $(date)"
@@ -128,15 +144,6 @@ done`, runFile)
 		return errors.Verify("Failed to write to watchdog file", errW)
 	}
 
-	//if _, errW := file.WriteString(content); errW != nil {
-	//	return "", errors.Verify("Failed to write to watchdog file", errW)
-	//}
-	//// chmod +x
-	//if errCh := os.Chmod(watchdogFile, 0755); errCh != nil {
-	//	return "", errors.Verify("Failed to change permissions of watchdog file", errCh)
-	//}
-	//}
-
 	if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Stopping watchdog service..."); rErr != nil {
 		return rErr
 	} else {
@@ -148,45 +155,90 @@ done`, runFile)
 		runBack("Watchdog service stopped.")
 	}
 
-	if _, rErr := deploy.RunCommand(ctx, "./restart.sh", nil); rErr != nil {
-		return rErr
-	}
-
-	time.Sleep(3 * time.Second)
-	var runErr *errors.Error
-	if r, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("ps -ef | grep %s | grep -v grep", runFile)); rErr != nil {
-		return rErr
-	} else {
-		if len(r) == 0 {
-			logger.Error(ctx, "Service is not running")
-			runErr = errors.Verify("Service is not running")
-			goto end
+	runBack("restarting service...")
+	go func() {
+		if _, rErr := deploy.RunCommand(ctx, "./restart.sh", nil); rErr != nil {
+			runBack(fmt.Sprintf("Failed to execute restart.sh: %v", rErr))
 		}
-	}
-
-	if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
-		return rErr
-	} else {
-		runBack("Starting watchdog service...")
-	}
-	if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
-		return rErr
-	} else {
-		runBack("Watchdog service started.")
-	}
-
-end:
-	if log, rErr := deploy.RunCommand(ctx, "cat", nil, "nohup.out"); rErr != nil {
-		return rErr
-	} else {
-		runBack(log)
-	}
-
-	if runErr != nil {
-		return runErr
-	}
+	}()
 
 	return nil
+}
+
+func (a appService) RestartSuccess(ctx *gin.Context, id, itemID string) {
+	logger.Info(ctx, "Restarting application...")
+	localID, err := cache.New[string](cache.JSON).Get(startIDKey)
+	if err != nil {
+		logger.Error(ctx, "Failed to get local startID")
+		return
+	}
+	if localID != id {
+		logger.Error(ctx, "StartID mismatch")
+		return
+	}
+	go func() {
+		if err := cache.New[string](cache.JSON).Del(startIDKey); err != nil {
+			logger.Error(ctx, "Failed to delete local startID")
+			return
+		}
+	}()
+
+	go func() {
+		if itemID != "" {
+			messagex.PublishNewMsg(ctx, deploy.TopicRunStarted, map[string]string{
+				"itemID": itemID,
+			})
+		}
+	}()
+
+	go func() {
+		if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
+			logger.Error(ctx, "Failed to start watchdog service")
+			return
+		}
+
+		if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
+			logger.Error(ctx, "Failed to start watchdog service")
+			return
+		} else {
+			logger.Info(ctx, "Watchdog service started.")
+		}
+	}()
+
+	//	time.Sleep(3 * time.Second)
+	//	var runErr *errors.Error
+	//	if r, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("ps -ef | grep %s | grep -v grep", runFile)); rErr != nil {
+	//		return rErr
+	//	} else {
+	//		if len(r) == 0 {
+	//			logger.Error(ctx, "Service is not running")
+	//			runErr = errors.Verify("Service is not running")
+	//			goto end
+	//		}
+	//	}
+	//
+	//	if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
+	//		return rErr
+	//	} else {
+	//		runBack("Starting watchdog service...")
+	//	}
+	//	if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
+	//		return rErr
+	//	} else {
+	//		runBack("Watchdog service started.")
+	//	}
+	//
+	//end:
+	//	if log, rErr := deploy.RunCommand(ctx, "cat", nil, "nohup.out"); rErr != nil {
+	//		return rErr
+	//	} else {
+	//		runBack(log)
+	//	}
+	//
+	//	if runErr != nil {
+	//		return runErr
+	//	}
+
 }
 
 func (a appService) Stop(ctx *gin.Context) *errors.Error {
@@ -221,9 +273,12 @@ echo "Service stopped successfully."`, sys.RunMode, runFile)
 	//}
 	//}
 
-	if _, err := deploy.RunCommand(ctx, "./stop.sh", deploy.DefOpts()); err != nil {
-		return errors.Verify("Failed to execute stop.sh", err)
-	}
+	go func() {
+		if _, err := deploy.RunCommand(ctx, "./stop.sh", deploy.DefOpts()); err != nil {
+			logger.Error(ctx, fmt.Sprintf("Failed to execute stop.sh: %v", err))
+			return
+		}
+	}()
 
 	return nil
 }

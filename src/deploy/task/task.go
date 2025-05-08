@@ -45,6 +45,7 @@ func init() {
 	cronx.AddTask("* */1 * * * *", Task.timeOut)
 	cronx.AddTask("* */10 * * * *", Task.CleanBackup)
 	go Task.run()
+	go Task.StartedListen()
 }
 
 func SetBackupCount(count int) {
@@ -201,7 +202,7 @@ func autoCheck() {
 
 func (t taskService) run() {
 	for {
-		time.Sleep(1 * time.Second)
+		time.Sleep(5 * time.Second)
 		t.deploy(logger.NewCtx())
 	}
 }
@@ -277,14 +278,10 @@ func (t taskService) deploy(ctx context.Context) {
 		}
 		if restartErr := app.App.Restart(ctx, runFile, func(log string) {
 			item.Running(log)
-		}); restartErr != nil {
+		}, item.ID); restartErr != nil {
 			item.Running(restartErr.Error(), Error)
 			return
 		}
-
-		item.Status = Success
-		item.FinishAt = time.Now()
-		item.Running(fmt.Sprintf("Deploy task finished successfully"), Light)
 	} else {
 		logger.Info(ctx, fmt.Sprintf("Task %s is not in waiting state", item.ID))
 	}
@@ -479,6 +476,36 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 	return outputName
 }
 
+func (t taskService) StartedListen() {
+	var rid uint64
+	ctx := logger.NewCtx()
+	rid, _ = messagex.RegisterTopic(deploy.TopicRunStarted, func(msg *messagex.Message) *errors.Error {
+		id := msg.GetValueStr("itemID")
+		logger.Info(ctx, fmt.Sprintf("Task started: %s", id))
+		cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+		item, err := cachePage.Get(map[string]any{"id": id})
+		if err != nil {
+			logger.Error(ctx, fmt.Sprintf("Error getting task item: %v", err))
+			return nil
+		}
+		if item == nil {
+			logger.Error(ctx, "Task item not found")
+			return nil
+		}
+
+		item.Running(fmt.Sprintf("Task started: %s", id))
+		item.Status = Success
+		item.FinishAt = time.Now()
+		item.Running(fmt.Sprintf("Deploy task finished successfully"), Light)
+
+		go func() {
+			time.Sleep(1000 * time.Millisecond)
+			_ = messagex.UnSubscribe(deploy.TopicRunStarted, rid)
+		}()
+		return nil
+	})
+}
+
 func (t taskService) timeOut() {
 	ctx := logger.NewCtx()
 	defer func() {
@@ -487,7 +514,7 @@ func (t taskService) timeOut() {
 		}
 	}()
 	storage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
-	items, err := storage.Find(0, 1, map[string]any{"status": Running}, cache.PageSorterAsc("createAt"))
+	items, err := storage.Find(0, 10, map[string]any{"status": Running}, cache.PageSorterAsc("createAt"))
 	if err != nil {
 		logger.Error(ctx, fmt.Sprintf("Error finding running task items: %v", err))
 		return

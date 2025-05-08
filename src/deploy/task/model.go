@@ -119,8 +119,8 @@ func (t *TaskRecord) TimeOut(log string) {
 	t.Running(fmt.Sprintf(log), Error)
 	t.Status = Timeout
 	t.FinishAt = time.Now()
-
-	if err := t.Storage.Update(map[string]any{"id": t.ID}, t); err != nil {
+	storage := cache.NewPageStorage[TaskRecord](t.Ctx, cache.Sqlite)
+	if err := storage.Update(map[string]any{"id": t.ID}, t); err != nil {
 		logger.Error(t.Ctx, fmt.Sprintf("Error updating task item: %v", err))
 	}
 }
