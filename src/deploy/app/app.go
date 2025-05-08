@@ -137,24 +137,24 @@ done`, runFile)
 	//}
 	//}
 
-	if _, rErr := deploy.RunCommand(ctx, "echo", "Stopping watchdog service..."); rErr != nil {
+	if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Stopping watchdog service..."); rErr != nil {
 		return rErr
 	} else {
 		runBack("Stopping watchdog service...")
 	}
-	if _, rErr := deploy.RunCommand(ctx, "pkill", "-9", "-f", fmt.Sprintf("watchdog_%s.sh", sys.RunMode)); rErr != nil {
+	if _, rErr := deploy.RunCommand(ctx, "pkill", nil, "-9", "-f", fmt.Sprintf("watchdog_%s.sh", sys.RunMode)); rErr != nil {
 		return rErr
 	} else {
 		runBack("Watchdog service stopped.")
 	}
 
-	if _, rErr := deploy.RunCommand(ctx, "./restart.sh"); rErr != nil {
+	if _, rErr := deploy.RunCommand(ctx, "./restart.sh", nil); rErr != nil {
 		return rErr
 	}
 
 	time.Sleep(3 * time.Second)
 	var runErr *errors.Error
-	if r, rErr := deploy.RunCommand(ctx, "bash", "-c", fmt.Sprintf("ps -ef | grep %s | grep -v grep", runFile)); rErr != nil {
+	if r, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("ps -ef | grep %s | grep -v grep", runFile)); rErr != nil {
 		return rErr
 	} else {
 		if len(r) == 0 {
@@ -164,19 +164,19 @@ done`, runFile)
 		}
 	}
 
-	if _, rErr := deploy.RunCommand(ctx, "echo", "Starting watchdog service..."); rErr != nil {
+	if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
 		return rErr
 	} else {
 		runBack("Starting watchdog service...")
 	}
-	if _, rErr := deploy.RunCommand(ctx, "bash", "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
+	if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
 		return rErr
 	} else {
 		runBack("Watchdog service started.")
 	}
 
 end:
-	if log, rErr := deploy.RunCommand(ctx, "cat", "nohup.out"); rErr != nil {
+	if log, rErr := deploy.RunCommand(ctx, "cat", nil, "nohup.out"); rErr != nil {
 		return rErr
 	} else {
 		runBack(log)
@@ -221,7 +221,7 @@ echo "Service stopped successfully."`, sys.RunMode, runFile)
 	//}
 	//}
 
-	if _, err := deploy.RunCommand(ctx, "./stop.sh"); err != nil {
+	if _, err := deploy.RunCommand(ctx, "./stop.sh", deploy.DefOpts()); err != nil {
 		return errors.Verify("Failed to execute stop.sh", err)
 	}
 

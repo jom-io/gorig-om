@@ -15,3 +15,9 @@ type GitRepo struct {
 	URL    string   `json:"url"`
 	Branch []string `json:"branch"`
 }
+
+type GoEnv struct {
+	Key     string `json:"key" form:"gitInit" binding:"required"`
+	Value   string `json:"value" form:"gitInit" binding:"required"`
+	Default bool   `json:"default"`
+}

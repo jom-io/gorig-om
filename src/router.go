@@ -42,8 +42,10 @@ func Setup() {
 		deploy.GET("branches", dpGit.Branches)
 
 		goEnv := deploy.Group("go")
-		goEnv.GET("check", dpGit.CheckGoEnv)
-		goEnv.POST("install", dpGit.InstallGoEnv)
+		goEnv.GET("check", dpGit.CheckGo)
+		goEnv.POST("install", dpGit.InstallGo)
+		goEnv.GET("env", dpGit.GoEnvGet)
+		goEnv.POST("env", dpGit.GoEnvSet)
 
 		//deploy.GET("repository", dpGit.GetRepo)
 		//deploy.POST("repository", dpGit.SetRepo)

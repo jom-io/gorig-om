@@ -40,14 +40,31 @@ func GenSSHKey(ctx *gin.Context) {
 	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
 }
 
-func CheckGoEnv(ctx *gin.Context) {
+func CheckGo(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
-	result := Env.CheckGoEnv(ctx)
+	result := Env.CheckGo(ctx)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
 }
 
-func InstallGoEnv(ctx *gin.Context) {
+func InstallGo(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
-	result := Env.InitGoEnv(ctx)
+	result := Env.InitGo(ctx)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
+}
+
+func GoEnvGet(ctx *gin.Context) {
+	defer apix.HandlePanic(ctx)
+	result := Env.GoEnvGet(ctx)
+	apix.HandleData(ctx, consts.CurdSelectFailCode, &result, nil)
+}
+
+func GoEnvSet(ctx *gin.Context) {
+	defer apix.HandlePanic(ctx)
+	envList := &[]GoEnv{}
+	e := apix.Bind(ctx, &envList)
+	if e != nil {
+		return
+	}
+	err := Env.GoEnvSet(ctx, *envList)
+	apix.HandleData(ctx, consts.CurdSelectFailCode, nil, err)
 }

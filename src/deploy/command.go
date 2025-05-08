@@ -3,58 +3,143 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"github.com/jom-io/gorig/utils/errors"
+	"github.com/jom-io/gorig/global/consts"
+	"github.com/jom-io/gorig/mid/messagex"
+	localErrs "github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
+	"github.com/spf13/cast"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
-func RunCommandLog(ctx context.Context, cmd string, args ...string) (string, *errors.Error) {
-	return RunCommandAll(ctx, true, "", nil, cmd, args...)
+const (
+	runTimeoutDef   = 1 * time.Minute
+	TopicRunTimeout = "run_timeout"
+)
+
+type RunOpts struct {
+	Dir      string
+	Env      []string
+	PrintLog bool
+	TimeOut  time.Duration
 }
 
-func RunCommand(ctx context.Context, cmd string, args ...string) (string, *errors.Error) {
-	return RunCommandAll(ctx, false, "", nil, cmd, args...)
+func DefOpts() *RunOpts {
+	return &RunOpts{
+		Dir:      "",
+		Env:      nil,
+		PrintLog: true,
+		TimeOut:  runTimeoutDef,
+	}
 }
 
-func RunCommandEnv(ctx context.Context, env []string, cmd string, args ...string) (string, *errors.Error) {
-	return RunCommandAll(ctx, false, "", env, cmd, args...)
+func (opts *RunOpts) SetDir(dir string) *RunOpts {
+	opts.Dir = dir
+	return opts
 }
 
-func RunCommandDir(ctx context.Context, dir string, cmd string, args ...string) (string, *errors.Error) {
-	return RunCommandAll(ctx, false, dir, nil, cmd, args...)
+func (opts *RunOpts) SetEnv(env []string) *RunOpts {
+	opts.Env = env
+	return opts
 }
 
-func RunCommandAll(ctx context.Context, printLog bool, dir string, env []string, cmd string, args ...string) (string, *errors.Error) {
-	if printLog {
+func (opts *RunOpts) SetPrintLog(printLog bool) *RunOpts {
+	opts.PrintLog = printLog
+	return opts
+}
+
+func (opts *RunOpts) SetTimeOut(timeOut time.Duration) *RunOpts {
+	opts.TimeOut = timeOut
+	return opts
+}
+
+func (opts *RunOpts) DirExists() bool {
+	if opts.Dir == "" {
+		return false
+	}
+	if _, err := os.Stat(opts.Dir); os.IsNotExist(err) {
+		return false
+	}
+	return true
+}
+
+func (opts *RunOpts) EnvExists() bool {
+	if opts.Env == nil {
+		return true
+	}
+	for _, env := range opts.Env {
+		if env == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func (opts *RunOpts) PrintLogEnabled() bool {
+	if opts.PrintLog {
+		return true
+	}
+	return false
+}
+
+func (opts *RunOpts) TimeOutValid() bool {
+	if opts.TimeOut > 0 {
+		return true
+	}
+	return false
+}
+
+func RunCommand(ctx context.Context, cmd string, runOpts *RunOpts, args ...string) (string, *localErrs.Error) {
+	if runOpts == nil {
+		runOpts = &RunOpts{
+			TimeOut: runTimeoutDef,
+		}
+	}
+	if runOpts.TimeOutValid() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, runOpts.TimeOut)
+		defer cancel()
+		defer func() {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				_ = messagex.Publish(fmt.Sprintf("%s.%s", TopicRunTimeout, cast.ToString(ctx.Value(consts.TraceIDKey))), nil)
+			}
+		}()
+	}
+
+	return runCommand(ctx, cmd, runOpts, args...)
+}
+
+func runCommand(ctx context.Context, cmd string, opts *RunOpts, args ...string) (string, *localErrs.Error) {
+	if opts.PrintLogEnabled() {
 		logger.Info(ctx, fmt.Sprintf("Running command: %s %s", cmd, strings.Join(args, " ")))
 	}
-	command := exec.Command(cmd, args...)
+
+	command := exec.CommandContext(ctx, cmd, args...)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &out
 	command.Stderr = &stderr
-	if dir != "" {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			return "", errors.Verify("Directory does not exist", err)
-		}
-		command.Dir = dir
+	if opts.DirExists() {
+		command.Dir = opts.Dir
 	}
-	if env != nil {
-		command.Env = append(os.Environ(), env...)
+	if opts.EnvExists() {
+		command.Env = append(os.Environ(), opts.Env...)
 	}
 
 	err := command.Run()
+
 	if err != nil {
-		if !printLog {
+		if !opts.PrintLogEnabled() {
 			logger.Info(ctx, fmt.Sprintf("Running command: %s %s", cmd, strings.Join(args, " ")))
 		}
 		errInfo := fmt.Sprintf("Command failed: %s\n%s", err.Error(), stderr.String())
 		logger.Error(ctx, errInfo)
 		if stderr.Len() > 0 {
-			return "", errors.Verify(errInfo)
+			return "", localErrs.Verify(errInfo)
 		} else {
 			return "", nil
 		}
@@ -71,7 +156,7 @@ func RunCommandAll(ctx context.Context, printLog bool, dir string, env []string,
 	if len(output) > 0 {
 		result = strings.TrimSuffix(result, "\n")
 	}
-	if printLog {
+	if opts.PrintLogEnabled() {
 		logger.Info(ctx, fmt.Sprintf("Command output: %s", result))
 	}
 

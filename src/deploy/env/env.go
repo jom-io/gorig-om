@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/jom-io/gorig-om/src/deploy"
+	"github.com/jom-io/gorig/cache"
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
 	"net/url"
@@ -37,7 +38,7 @@ func (c envService) CheckGit(ctx context.Context) EnvVersion {
 	gitVersion := EnvVersion{
 		Installed: true,
 	}
-	result, err := deploy.RunCommand(ctx, "git", "--version")
+	result, err := deploy.RunCommand(ctx, "git", nil, "--version")
 	if err != nil {
 		gitVersion.Error = fmt.Sprintf("Git check failed, result:%v,err:%v", result, err)
 		logger.Warn(ctx, gitVersion.Error)
@@ -93,13 +94,13 @@ func (c envService) installGit(ctx context.Context, manager string) (string, err
 	switch manager {
 	case "apt":
 		//cmd = exec.Command("bash", "-c", "apt update && apt install -y git")
-		return deploy.RunCommand(ctx, "bash", "-c", "apt update && apt install -y git")
+		return deploy.RunCommand(ctx, "bash", deploy.DefOpts(), "-c", "apt update && apt install -y git")
 	case "yum":
 		//cmd = exec.Command("bash", "-c", "yum install -y git")
-		return deploy.RunCommand(ctx, "bash", "-c", "yum install -y git")
+		return deploy.RunCommand(ctx, "bash", deploy.DefOpts(), "-c", "yum install -y git")
 	case "apk":
 		//cmd = exec.Command("bash", "-c", "apk add git")
-		return deploy.RunCommand(ctx, "bash", "-c", "apk add git")
+		return deploy.RunCommand(ctx, "bash", deploy.DefOpts(), "-c", "apk add git")
 	default:
 		return "", errors.Verify("Unsupported package manager")
 	}
@@ -110,7 +111,7 @@ func (c envService) Branches(ctx context.Context, repoURL string) ([]string, *er
 	logger.Info(ctx, fmt.Sprintf("Listing branches for repository: %s", repoURL))
 
 	// git", "ls-remote", "--heads", repoURL
-	branches, errR := deploy.RunCommand(ctx, "git", "ls-remote", "--heads", repoURL)
+	branches, errR := deploy.RunCommand(ctx, "git", nil, "ls-remote", "--heads", repoURL)
 	if errR != nil {
 		if strings.Contains(errR.Error(), "Host key verification failed") {
 			logger.Warn(ctx, "Host key verification failed, trying to trust host...")
@@ -119,7 +120,7 @@ func (c envService) Branches(ctx context.Context, repoURL string) ([]string, *er
 				if err := c.trustHost(ctx, host); err != nil {
 					return nil, errors.Verify("Failed to trust host", err)
 				}
-				branches, errR = deploy.RunCommand(ctx, "git", "ls-remote", "--heads", repoURL)
+				branches, errR = deploy.RunCommand(ctx, "git", nil, "ls-remote", "--heads", repoURL)
 			}
 		}
 		if errR != nil {
@@ -181,7 +182,7 @@ func (c envService) GetSSHKey(ctx context.Context) SshKey {
 	sshPath := filepath.Join(homeDir, ".ssh", "id_rsa.pub")
 
 	if _, errExist := os.Stat(sshPath); !os.IsNotExist(errExist) {
-		if result, errR := deploy.RunCommand(ctx, "cat", sshPath); errR != nil {
+		if result, errR := deploy.RunCommand(ctx, "cat", nil, sshPath); errR != nil {
 			sshKey.Error = fmt.Sprintf("Failed to read SSH key, err:%v", errR)
 		} else {
 			sshKey.PublicKey = result
@@ -204,7 +205,7 @@ func (c envService) GenSSHKey(ctx context.Context) SshKey {
 	sshPath := filepath.Join(homeDir, ".ssh", "id_rsa")
 
 	if _, errExist := os.Stat(sshPath); os.IsNotExist(errExist) {
-		hostname, errH := deploy.RunCommand(ctx, "hostname")
+		hostname, errH := deploy.RunCommand(ctx, "hostname", nil)
 		if errH != nil {
 			logger.Warn(ctx, fmt.Sprintf("Failed to retrieve hostname, err:%v", errH))
 		}
@@ -213,7 +214,7 @@ func (c envService) GenSSHKey(ctx context.Context) SshKey {
 		}
 		hostname = fmt.Sprintf("%s@%s", "gorig", hostname)
 
-		if _, errR := deploy.RunCommand(ctx, "ssh-keygen", "-t", "rsa", "-b", "4096", "-f", sshPath, "-C", hostname, "-N", ""); errR != nil {
+		if _, errR := deploy.RunCommand(ctx, "ssh-keygen", deploy.DefOpts(), "-t", "rsa", "-b", "4096", "-f", sshPath, "-C", hostname, "-N", ""); errR != nil {
 			sshKey.Error = fmt.Sprintf("Failed to generate SSH key, err:%v", errR)
 			return sshKey
 		}
@@ -229,7 +230,7 @@ func (c envService) GetLatestHash(ctx context.Context, repo, branch string) stri
 		return ""
 	}
 	//  git ls-remote git@github.com-jom:jom-io/gorig.git refs/heads/master
-	hash, err := deploy.RunCommand(ctx, "git", "ls-remote", "--heads", repo, branch)
+	hash, err := deploy.RunCommand(ctx, "git", nil, "ls-remote", "--heads", repo, branch)
 	if err != nil {
 		logger.Warn(ctx, fmt.Sprintf("Failed to retrieve latest git hash, err:%v", err))
 		return ""
@@ -241,12 +242,12 @@ func (c envService) GetLatestHash(ctx context.Context, repo, branch string) stri
 	return hash
 }
 
-func (c envService) CheckGoEnv(ctx context.Context) EnvVersion {
+func (c envService) CheckGo(ctx context.Context) EnvVersion {
 	logger.Info(ctx, "Checking if go is available...")
 	goVersion := EnvVersion{
 		Installed: true,
 	}
-	result, err := deploy.RunCommandLog(ctx, "go", "version")
+	result, err := deploy.RunCommand(ctx, "go", deploy.DefOpts(), "version")
 	if err != nil {
 		goVersion.Error = fmt.Sprintf("Go check, result:%v,err:%v", result, err)
 		logger.Warn(ctx, goVersion.Error)
@@ -274,9 +275,9 @@ func (c envService) CheckGoEnv(ctx context.Context) EnvVersion {
 	return goVersion
 }
 
-func (c envService) InitGoEnv(ctx context.Context) EnvVersion {
+func (c envService) InitGo(ctx context.Context) EnvVersion {
 	logger.Info(ctx, "Installing go...")
-	goVersion := c.CheckGoEnv(ctx)
+	goVersion := c.CheckGo(ctx)
 	if goVersion.Installed {
 		logger.Warn(ctx, "Go is already installed")
 		return goVersion
@@ -288,7 +289,7 @@ func (c envService) InitGoEnv(ctx context.Context) EnvVersion {
 		return goVersion
 	}
 
-	return c.CheckGoEnv(ctx)
+	return c.CheckGo(ctx)
 }
 
 func (c envService) installGo(ctx context.Context) (EnvVersion, *errors.Error) {
@@ -305,12 +306,12 @@ sudo rm -rf go%s.linux-amd64.*
 go version
 `, GOVersion, GOVersion, GOVersion)
 
-	output, err := deploy.RunCommandLog(ctx, "bash", "-c", cmd)
+	output, err := deploy.RunCommand(ctx, "bash", deploy.DefOpts(), "-c", cmd)
 	if err != nil {
 		return EnvVersion{}, errors.Verify(fmt.Sprintf("output:%s \n err:%v", output, err))
 	}
 
-	return c.CheckGoEnv(ctx), nil
+	return c.CheckGo(ctx), nil
 }
 
 // versionCompare compares two version strings and returns: 1 if version1 > version2, -1 if version1 < version2, and 0 if they are equal.
@@ -335,4 +336,81 @@ func versionCompare(version1, version2 string) int {
 	}
 
 	return 0
+}
+
+var EnvDefault = []GoEnv{
+	{"GOARCH", "amd64", true},
+	{"GOOS", "linux", true},
+}
+
+func (c envService) GoEnvSet(ctx context.Context, env []GoEnv) *errors.Error {
+	logger.Info(ctx, fmt.Sprintf("Setting go env %v", env))
+	for _, e := range EnvDefault {
+		found := false
+		for _, e2 := range env {
+			if e2.Key == e.Key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			env = append([]GoEnv{e}, env...)
+		}
+	}
+
+	var deleteEnvs []string
+	getEnv, err := cache.New[[]GoEnv](cache.JSON).Get("go_env")
+	if err != nil {
+		logger.Error(ctx, fmt.Sprintf("Failed to get go env %v", err))
+	}
+	if getEnv != nil {
+		for _, e := range getEnv {
+			found := false
+			for _, e2 := range env {
+				if e2.Key == e.Key {
+					found = true
+					break
+				}
+			}
+			if !found {
+				deleteEnvs = append(deleteEnvs, e.Key)
+			}
+		}
+	}
+
+	for _, e := range deleteEnvs {
+		if err := os.Unsetenv(e); err != nil {
+			logger.Error(ctx, fmt.Sprintf("Failed to unset env %s %v", e, err))
+		}
+		if _, err := deploy.RunCommand(ctx, "go", deploy.DefOpts(), "env", "-u", e); err != nil {
+			logger.Error(ctx, fmt.Sprintf("Failed to unset go env %s %v", e, err))
+		}
+	}
+
+	if err := cache.New[[]GoEnv](cache.JSON).Set("go_env", env, 0); err != nil {
+		return errors.Verify(fmt.Sprintf("Failed to set go env %v", err))
+	}
+	return nil
+}
+
+func (c envService) GoEnvGet(ctx context.Context) []GoEnv {
+	logger.Info(ctx, fmt.Sprintf("Getting go env"))
+	env, err := cache.New[[]GoEnv](cache.JSON).Get("go_env")
+	if err != nil {
+		logger.Error(ctx, fmt.Sprintf("Failed to get go env %v", err))
+		return nil
+	}
+	if env == nil {
+		env = []GoEnv{}
+		env = append(env, EnvDefault...)
+		env = append(env, GoEnv{"CGO_ENABLED", "0", false})
+		env = append(env, GoEnv{"GO111MODULE", "on", false})
+		if e := c.GoEnvSet(ctx, env); e != nil {
+			logger.Error(ctx, fmt.Sprintf("Goenv init failed to set go env %v", e))
+			return nil
+		}
+		return nil
+	}
+	logger.Info(ctx, fmt.Sprintf("Got go env %v", env))
+	return env
 }

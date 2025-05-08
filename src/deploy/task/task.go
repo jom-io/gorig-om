@@ -2,17 +2,21 @@ package delpoy
 
 import (
 	"context"
+	ers "errors"
 	"fmt"
 	"github.com/jom-io/gorig-om/src/deploy"
 	"github.com/jom-io/gorig-om/src/deploy/app"
-	delpoy "github.com/jom-io/gorig-om/src/deploy/env"
+	deployEnv "github.com/jom-io/gorig-om/src/deploy/env"
 	"github.com/jom-io/gorig/cache"
 	"github.com/jom-io/gorig/cronx"
 	"github.com/jom-io/gorig/global/variable"
+	"github.com/jom-io/gorig/mid/messagex"
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
 	"github.com/jom-io/gorig/utils/sys"
 	"github.com/rs/xid"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,14 +31,17 @@ type taskService struct {
 
 const DpTaskKey = "dp_task_config"
 const workDir = ".deploy"
-const TimeOut = 3 * time.Minute
+const TimeOut = 10 * time.Minute
 
 var backupCount = 10
 
 func init() {
 	Task = taskService{}
+	if variable.OMKey == "" {
+		return
+	}
 	cronx.AddTask("*/10 * * * * *", autoCheck)
-	cronx.AddTask("*/15 * * * * *", Task.timeOut)
+	cronx.AddTask("* */1 * * * *", Task.timeOut)
 	cronx.AddTask("* */10 * * * *", Task.CleanBackup)
 	go Task.run()
 }
@@ -172,7 +179,7 @@ func autoCheck() {
 		//logger.Info(ctx, "Auto trigger is disabled or options are nil")
 		return
 	}
-	hash := delpoy.Env.GetLatestHash(ctx, opts.Repo, opts.Branch)
+	hash := deployEnv.Env.GetLatestHash(ctx, opts.Repo, opts.Branch)
 
 	storage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
 	item, getErr := storage.Get(map[string]any{"gitHash": hash})
@@ -192,9 +199,10 @@ func autoCheck() {
 }
 
 func (t taskService) run() {
-	time.Sleep(10 * time.Second)
-	t.deploy(logger.NewCtx())
-	t.run()
+	for {
+		time.Sleep(1 * time.Second)
+		t.deploy(logger.NewCtx())
+	}
 }
 
 func (t taskService) deploy(ctx context.Context) {
@@ -203,6 +211,7 @@ func (t taskService) deploy(ctx context.Context) {
 			logger.Error(ctx, fmt.Sprintf("Panic in deploy: %v", r))
 		}
 	}()
+
 	storage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
 	// if there are tasks running, do not execute
 	runningItems, err := storage.Find(0, 1, map[string]any{"status": Running}, cache.PageSorterAsc("createAt"))
@@ -215,7 +224,7 @@ func (t taskService) deploy(ctx context.Context) {
 		return
 	}
 
-	items, err := storage.Find(0, 10, map[string]any{"status": Waiting}, cache.PageSorterAsc("createAt"))
+	items, err := storage.Find(0, 1, map[string]any{"status": Waiting}, cache.PageSorterAsc("createAt"))
 	if err != nil {
 		logger.Error(ctx, fmt.Sprintf("Error finding task items: %v", err))
 		return
@@ -228,6 +237,25 @@ func (t taskService) deploy(ctx context.Context) {
 
 	if item.Status == Waiting {
 		logger.Info(ctx, fmt.Sprintf("Running task: %s", item.ID))
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, TimeOut)
+		defer cancel()
+
+		topic := fmt.Sprintf("%s.%s", deploy.TopicRunTimeout, logger.GetTraceID(ctx))
+		var rID uint64
+		rID, _ = messagex.RegisterTopic(topic, func(msg *messagex.Message) *errors.Error {
+			item.TimeOut("Deploy timed out")
+			return nil
+		})
+
+		defer func() {
+			_ = messagex.UnSubscribe(topic, rID)
+			if ers.Is(ctx.Err(), context.DeadlineExceeded) {
+				item.TimeOut("Deploy timed out")
+				return
+			}
+		}()
+
 		item.Ctx = ctx
 		item.Storage = storage
 		item.Running(fmt.Sprintf("Running task %s", item.ID))
@@ -263,19 +291,18 @@ func (t taskService) deploy(ctx context.Context) {
 
 func (t taskService) clone(ctx context.Context, codeDir string, item *TaskRecord) {
 	logger.Info(ctx, fmt.Sprintf("Cloning repository: %s", item.Repo))
-	item.Running(fmt.Sprintf("Cloning repository: %s, %s", item.Repo, item.Branch), Light)
 
+	item.Running(fmt.Sprintf("Cloning repository: %s, %s", item.Repo, item.Branch), Light)
 	if item.Repo == "" || item.Branch == "" {
 		item.Running(fmt.Sprintf("Repository URL or branch is empty"))
 		return
 	}
 
 	item.Running(fmt.Sprintf("Getting latest git hash... "))
-	hash := delpoy.Env.GetLatestHash(ctx, item.Repo, item.Branch)
+	hash := deployEnv.Env.GetLatestHash(ctx, item.Repo, item.Branch)
 	item.GitHash = hash
 	item.Running(fmt.Sprintf("Git hash: %s", item.GitHash), Light)
 
-	item.Running(fmt.Sprintf("Making code directory: %s", codeDir))
 	if _, err := os.Stat(codeDir); err == nil {
 		item.Running(fmt.Sprintf("Removing existing code directory: %s", codeDir), Warn)
 		if err := os.RemoveAll(codeDir); err != nil {
@@ -284,8 +311,15 @@ func (t taskService) clone(ctx context.Context, codeDir string, item *TaskRecord
 		}
 	}
 
+	if err := os.MkdirAll(codeDir, 0755); err != nil {
+		item.Running(fmt.Sprintf("Error making code directory: %v", err), Error)
+		return
+	} else {
+		item.Running(fmt.Sprintf("Made code directory: %s", codeDir), Light)
+	}
+
 	item.Running(fmt.Sprintf("Cloning repository: %s %s", item.Repo, item.Branch))
-	if _, err := deploy.RunCommand(ctx, "git", "clone", "--depth", "1", "-b", item.Branch, item.Repo, codeDir); err != nil {
+	if _, err := deploy.RunCommand(ctx, "git", deploy.DefOpts().SetTimeOut(2*time.Minute), "clone", "--depth", "1", "-b", item.Branch, item.Repo, codeDir); err != nil {
 		item.Running(fmt.Sprintf("Error cloning repository: %v", err), Error)
 		return
 	} else {
@@ -298,7 +332,7 @@ func (t taskService) clone(ctx context.Context, codeDir string, item *TaskRecord
 		fmt.Sprintf("GIT_DIR=%s/.git", codeDir),
 		fmt.Sprintf("GIT_WORK_TREE=%s", codeDir),
 	}
-	if commit, err := deploy.RunCommandEnv(ctx, env, "git", "log", "-1", "--pretty=%B"); err != nil {
+	if commit, err := deploy.RunCommand(ctx, "git", deploy.DefOpts().SetEnv(env), "log", "-1", "--pretty=%B"); err != nil {
 		item.Running(fmt.Sprintf("Error getting commit message: %v", err), Error)
 		return
 	} else {
@@ -332,28 +366,52 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 		return
 	}
 
-	envs := []struct {
-		key, value string
-	}{
-		{"GOARCH", "amd64"},
-		{"GOOS", "linux"},
-		{"CGO_ENABLED", "0"},
-		{"GO111MODULE", "on"},
-	}
+	envs := deployEnv.Env.GoEnvGet(ctx)
+	proxyConfig := false
 	for _, env := range envs {
-		if log, err := deploy.RunCommandDir(ctx, codeDir, "go", "env", "-w", fmt.Sprintf("%s=%s", env.key, env.value)); err != nil {
-			item.Running(fmt.Sprintf("Error setting Go environment: %v", err), Error)
-			return
-		} else {
-			item.Running(fmt.Sprintf("Set Go environment: env %s=%s, %s", env.key, env.value, log))
+		if env.Key == "GOPROXY" {
+			proxyConfig = true
+			break
 		}
 	}
 
-	item.Running(fmt.Sprintf("Running go mod tidy..."))
-	env := []string{
-		fmt.Sprintf("GOPROXY=%s", "https://goproxy.cn"),
+	if !proxyConfig {
+		testURL := "https://proxy.golang.org/github.com/gin-gonic/gin/@v/list"
+		client := http.Client{Timeout: 2 * time.Second}
+
+		resp, err := client.Head(testURL)
+		useChinaProxy := false
+		if err != nil || resp.StatusCode != 200 {
+			useChinaProxy = true
+		}
+		if useChinaProxy {
+			envs = append(envs, deployEnv.GoEnv{
+				Key:   "GOPROXY",
+				Value: "https://goproxy.cn,direct",
+			})
+			if setErr := deployEnv.Env.GoEnvSet(ctx, envs); setErr != nil {
+				item.Running(fmt.Sprintf("Error setting Go environment: %v", setErr), Warn)
+			}
+		}
 	}
-	if _, err := deploy.RunCommandAll(ctx, true, codeDir, env, "go", "mod", "tidy"); err != nil {
+
+	for _, env := range envs {
+		if log, err := deploy.RunCommand(ctx, "go", deploy.DefOpts().SetDir(codeDir), "env", "-w", fmt.Sprintf("%s=%s", env.Key, env.Value)); err != nil {
+			item.Running(fmt.Sprintf("Error setting Go environment: %v", err), Error)
+			return
+		} else {
+			item.Running(fmt.Sprintf("Set Go environment: env %s=%s, %s", env.Key, env.Value, log))
+		}
+	}
+
+	if _, err := deploy.RunCommand(ctx, "git", deploy.DefOpts(), "config", "--global", "url.git@github.com:.insteadOf", "https://github.com/"); err != nil {
+		item.Running(fmt.Sprintf("Error setting git config: %v", err), Error)
+		return
+	}
+
+	item.Running(fmt.Sprintf("Running go mod tidy..."))
+
+	if _, err := deploy.RunCommand(ctx, "go", deploy.DefOpts().SetDir(codeDir).SetTimeOut(5*time.Minute), "mod", "tidy"); err != nil {
 		item.Running(fmt.Sprintf("Error running go mod tidy: %v", err), Error)
 		return
 	} else {
@@ -386,7 +444,12 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 	item.Running(fmt.Sprintf("Running go build..."))
 	outputPath := filepath.Join(codeDir, outputName)
 	//go build -o ${apiBinName}  -ldflags "-w -s"  -trimpath  ./simple/main.go
-	if _, err := deploy.RunCommandDir(ctx, codeDir, "go", "build", "-o", outputName, "-ldflags", "-w -s", "-trimpath", mainGoFile); err != nil {
+	buildOpts := &deploy.RunOpts{
+		PrintLog: true,
+		TimeOut:  2 * time.Minute,
+		Dir:      codeDir,
+	}
+	if _, err := deploy.RunCommand(ctx, "go", buildOpts, "build", "-o", outputName, "-ldflags", "-w -s", "-trimpath", mainGoFile); err != nil {
 		item.Running(fmt.Sprintf("Error building file: %v", err), Error)
 		return
 	} else {
@@ -412,13 +475,6 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 		item.Running(fmt.Sprintf("Copied file to backup directory: %s", backupPath), Light)
 	}
 
-	//item.Running(fmt.Sprintf("Cleaning code directory: %s", codeDir))
-	//if err := os.RemoveAll(codeDir); err != nil {
-	//	item.Running(fmt.Sprintf("Error cleaning code directory: %v", err), Error)
-	//	return
-	//} else {
-	//	item.Running(fmt.Sprintf("Cleaned code directory: %s", codeDir))
-	//}
 	return outputName
 }
 
@@ -440,10 +496,7 @@ func (t taskService) timeOut() {
 	}
 	for _, item := range items.Items {
 		if time.Since(item.StartAt) > TimeOut {
-			item.Running(fmt.Sprintf("Task timeout, Cancelled"), Warn)
-			item.Status = Timeout
-			item.FinishAt = time.Now()
-			_ = storage.Update(map[string]any{"id": item.ID}, item)
+			item.TimeOut("Task timeout")
 		}
 	}
 }
@@ -508,22 +561,17 @@ func copyFile(src, dst string) error {
 	}
 	defer from.Close()
 
-	to, err := os.Create(dst)
+	info, err := from.Stat()
+	if err != nil {
+		return err
+	}
+
+	to, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
 	if err != nil {
 		return err
 	}
 	defer to.Close()
 
-	_, err = from.Stat()
-	if err != nil {
-		return err
-	}
-
-	_, err = from.Seek(0, 0)
-	if err != nil {
-		return err
-	}
-
-	_, err = to.ReadFrom(from)
+	_, err = io.Copy(to, from)
 	return err
 }
