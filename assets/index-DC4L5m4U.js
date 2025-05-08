@@ -1,0 +1,1 @@
+import{j as e}from"./index-vi0Fzcbw.js";import{s as r}from"./vendor-ui-BgnAtmuh.js";import"./vendor-core-Cler3e7Q.js";import"./vendor-utils-Dg5_7-NF.js";function m(){return e.jsx(r.Title,{children:"Menu Level: 2a"})}export{m as default};
