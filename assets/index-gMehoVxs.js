@@ -1,1 +1,0 @@
-import{j as r}from"./index-CSQWneH1.js";import t from"./banner-card-Ba7O941R.js";import{U as o,V as s}from"./vendor-ui-BgnAtmuh.js";import"./vendor-core-Cler3e7Q.js";import"./vendor-utils-Dg5_7-NF.js";function p(){return r.jsx("div",{className:"p-2",children:r.jsx(o,{gutter:[16,16],justify:"center",children:r.jsx(s,{span:24,lg:24,children:r.jsx(t,{})})})})}export{p as default};
