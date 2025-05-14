@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"github.com/jom-io/gorig-om/src/deploy"
 	"github.com/jom-io/gorig/cache"
 	"github.com/jom-io/gorig/global/variable"
@@ -170,7 +169,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	return nil
 }
 
-func (a appService) RestartSuccess(ctx *gin.Context, id, itemID string) {
+func (a appService) RestartSuccess(ctx context.Context, id, itemID string) {
 	logger.Info(ctx, "Restarting application...")
 	localID, err := cache.New[string](cache.JSON).Get(startIDKey)
 	if err != nil {
@@ -249,7 +248,7 @@ func (a appService) RestartSuccess(ctx *gin.Context, id, itemID string) {
 
 }
 
-func (a appService) Stop(ctx *gin.Context) *errors.Error {
+func (a appService) Stop(ctx context.Context) *errors.Error {
 	logger.Info(ctx, "Stopping application...")
 
 	stopFile := "stop.sh"
@@ -273,14 +272,6 @@ echo "Service stopped successfully."`, sys.RunMode, runFile)
 		return errors.Verify("Failed to write to stop.sh file", errW)
 	}
 
-	//if _, errW := file.WriteString(content); errW != nil {
-	//	return "", errors.Verify("Failed to write to stop.sh file", errW)
-	//}
-	//if errCh := os.Chmod(stopFile, 0755); errCh != nil {
-	//	return "", errors.Verify("Failed to change permissions of stop.sh file", errCh)
-	//}
-	//}
-
 	go func() {
 		if _, err := deploy.RunCommand(ctx, "./stop.sh", deploy.DefOpts()); err != nil {
 			logger.Error(ctx, fmt.Sprintf("Failed to execute stop.sh: %v", err))
@@ -291,7 +282,7 @@ echo "Service stopped successfully."`, sys.RunMode, runFile)
 	return nil
 }
 
-func (a appService) Clean(ctx *gin.Context) *errors.Error {
+func (a appService) Clean(ctx context.Context) *errors.Error {
 	logger.Info(ctx, "Cleaning files...")
 
 	files := []string{"restart.sh", "stop.sh", fmt.Sprintf("watchdog_%s.sh", sys.RunMode), "nohup.out", "restart_logs", "watchdog.out"}

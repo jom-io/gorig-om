@@ -215,8 +215,7 @@ func autoCheck() {
 		return
 	}
 
-	//err = task.Start(ctx, true)
-	if err != nil {
+	if err = task.Start(ctx, true); err != nil {
 		logger.Error(ctx, fmt.Sprintf("Error starting task: %v", err))
 	}
 }
