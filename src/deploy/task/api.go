@@ -30,6 +30,16 @@ func Start(ctx *gin.Context) {
 	apix.HandleData(ctx, consts.CurdSelectFailCode, nil, err)
 }
 
+func Stop(ctx *gin.Context) {
+	defer apix.HandlePanic(ctx)
+	id, e := apix.GetParamType[string](ctx, "id", apix.Force)
+	if e != nil {
+		return
+	}
+	err := Task.Stop(ctx, id)
+	apix.HandleData(ctx, consts.CurdSelectFailCode, nil, err)
+}
+
 func Page(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
 	page, e := apix.GetParamType[int64](ctx, "page", apix.Force)

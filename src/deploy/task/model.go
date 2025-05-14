@@ -20,12 +20,12 @@ type TaskOptions struct {
 type Status string
 
 const (
-	Waiting Status = "waiting"
-	Running Status = "running"
-	Success Status = "success"
-	Failed  Status = "failed"
-	Timeout Status = "timeout"
-	Cancel  Status = "cancel"
+	Waiting  Status = "waiting"
+	Running  Status = "running"
+	Success  Status = "success"
+	Failed   Status = "failed"
+	Timeout  Status = "timeout"
+	Canceled Status = "canceled"
 )
 
 type RollbackStatus string
@@ -96,7 +96,7 @@ func (t *TaskRecord) Running(log string, level ...TaskRecordLogLevel) {
 		logger.Error(t.Ctx, "Task item not found")
 		return
 	}
-	if get.Status == Cancel || get.Status == Timeout || get.Status == Failed {
+	if get.Status == Canceled || get.Status == Timeout || get.Status == Failed {
 		logger.Error(t.Ctx, fmt.Sprintf("Task item already finished: %s", get.Status))
 		t.Status = get.Status
 		return

@@ -14,12 +14,12 @@ func Restart(ctx *gin.Context) {
 
 func ReStared(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
-	id, e := apix.GetParamForce(ctx, "id")
+	startID, e := apix.GetParamForce(ctx, "startID")
 	itemID, e := apix.GetParamStr(ctx, "itemID")
 	if e != nil {
 		return
 	}
-	App.RestartSuccess(ctx, id, itemID)
+	App.RestartSuccess(ctx, startID, itemID)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, nil, nil)
 }
 

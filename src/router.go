@@ -68,6 +68,7 @@ func Setup() {
 		task.GET("config", dpTask.GetConfig)
 		task.POST("config", dpTask.SaveConfig)
 		task.POST("start", dpTask.Start)
+		task.POST("stop", dpTask.Stop)
 		task.GET("page", dpTask.Page)
 		task.GET("get", dpTask.Get)
 		task.POST("rollback", dpTask.Rollback)

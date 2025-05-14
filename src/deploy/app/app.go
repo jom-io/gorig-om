@@ -15,7 +15,6 @@ import (
 	"github.com/rs/xid"
 	"os"
 	"strings"
-	"time"
 )
 
 var App appService
@@ -53,92 +52,100 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 			runFile = getFile
 		}
 	}
+	startID := xid.New().String()
+	if err := cache.New[string](cache.JSON).Set(startIDKey, startID, 0); err != nil {
+		return errors.Verify("Failed to set startID", err)
+	}
+	getStartID, err := cache.New[string](cache.JSON).Get(startIDKey)
+	if err != nil {
+		return errors.Verify("Failed to get startID", err)
+	}
+	logger.Info(ctx, fmt.Sprintf("Start ID: %s", getStartID))
+
 	if _, err := os.Stat(runFile); os.IsNotExist(err) {
-		return errors.Verify("Run file not found", err)
+		return errors.Verify("Restart run file not found", err)
 	}
 
 	fileInfo, err := os.Stat(runFile)
 	if err != nil {
-		return errors.Verify("Failed to get file info", err)
+		return errors.Verify("Restart failed to get file info", err)
 	}
 	if fileInfo.Mode()&0111 == 0 {
 		if err := os.Chmod(runFile, 0755); err != nil {
 			return errors.Verify("Failed to change file permissions", err)
 		}
-		logger.Info(nil, "File permissions changed to executable")
-	} else {
-		logger.Info(nil, "File is already executable")
+		logger.Info(nil, "Restart file permissions changed to executable")
 	}
 
 	runBack("Service restart ...")
 
 	restartFile := "restart.sh"
 
-	startID := xid.New().String()
-	if err = cache.New[string](cache.JSON).Set(startIDKey, startID, 30*time.Second); err != nil {
-		return errors.Verify("Failed to set startID", err)
-	}
-	runBack(fmt.Sprintf("Start ID: %s", startID))
+	runBack(fmt.Sprintf("Start ID: %s", getStartID))
 	port := configure.GetString("api.rest.addr", ":9617")
 	var itemID string
 	if len(itemIDs) > 0 {
 		itemID = itemIDs[0]
 	}
-	reStartAddr := fmt.Sprintf("http://127.0.0.1:%s/om/app/restarted?startID=%s&itemID=%s", port, startID, itemID)
+	reStartAddr := fmt.Sprintf("http://127.0.0.1%s/om/app/restarted?startID=%s&itemID=%s", port, startID, itemID)
 
 	content := fmt.Sprintf(`#!/bin/bash
-echo "Service restarting..."
-echo "Stopping service..."
-pkill -15 -f %s
-timeout=0
-while pgrep -f %s.linux64 > /dev/null; do
-    echo "Waiting for the service to stop..."
-    timeout=$(($timeout+1))
-    if [ $timeout -gt 10 ]; then
-        echo "Service stop failed. Force stop."
-        pkill -9 -f %s
-        break
-    fi
-    sleep 1
-done
-echo "Service stopped successfully."
-echo "Starting service..."
-export GORIG_SYS_MODE=%s
-nohup ./%s > nohup.out 2>&1 &
-pid=$!
-echo "Service started with PID: $pid"
-echo "Checking service startup status..."
-check_timeout=0
-while true; do
-    if curl -sf %s > /dev/null; then
-        echo "Service restarted."
-        break
-    fi
-    check_timeout=$(($check_timeout+1))
-    if [ $check_timeout -ge 120 ]; then
-        echo "Service start failed: Timeout reached."
-        exit 1
-    fi
-    sleep 1
-done
-`, runFile, runFile, runFile, sys.RunMode, runFile, reStartAddr)
+	echo "Service restarting..."
+	echo "Stopping service..."
+	pkill -15 -f %s
+	timeout=0
+	while pgrep -f %s.linux64 > /dev/null; do
+	   echo "Waiting for the service to stop..."
+	   timeout=$(($timeout+1))
+	   if [ $timeout -gt 10 ]; then
+	       echo "Service stop failed. Force stop."
+	       pkill -9 -f %s
+	       break
+	   fi
+	   sleep 1
+	done
+	echo "Service stopped successfully."
+	echo "Starting service..."
+	export GORIG_SYS_MODE=%s
+	nohup ./%s > nohup.out 2>&1 &
+	pid=$!
+	echo "Service started with PID: $pid"
+	echo "Checking service startup status..."
+	sleep 2
+	check_timeout=0
+	url="%s"
+	while true; do
+	   http_code=$(curl -s -o /dev/null -w "%%{http_code}" "$url")
+	   echo "Check $url => HTTP $http_code"
+	   if [ "$http_code" = "200" ]; then
+	       echo "Service restarted."
+	       break
+	   fi
+	   check_timeout=$(($check_timeout+1))
+	   if [ $check_timeout -ge 120 ]; then
+	       echo "Service start failed: Timeout reached."
+	       exit 1
+	   fi
+	   sleep 1
+	done
+	`, runFile, runFile, runFile, sys.RunMode, runFile, reStartAddr)
 
 	if errW := os.WriteFile(restartFile, []byte(content), 0755); errW != nil {
 		return errors.Verify("Failed to write to restart.sh file", errW)
 	}
 
 	content = fmt.Sprintf(`#!/bin/bash
-echo "Watchdog service started at: $(date)"
-while true; do
-    echo "Checking at: $(date)"
-    if ! pgrep -f %s > /dev/null; then
-        echo "Service is not running. Restarting..."
-        mkdir -p restart_logs
-        cp nohup.out restart_logs/auto_restart_$(date +%%Y%%m%%d%%H%%M%%S).log
-        ./restart.sh
-    fi
-    sleep 5
-done`, runFile)
+	echo "Watchdog service started at: $(date)"
+	while true; do
+	   echo "Checking at: $(date)"
+	   if ! pgrep -f %s > /dev/null; then
+	       echo "Service is not running. Restarting..."
+	       mkdir -p restart_logs
+	       cp nohup.out restart_logs/auto_restart_$(date +%%Y%%m%%d%%H%%M%%S).log
+	       ./restart.sh
+	   fi
+	   sleep 5
+	done`, runFile)
 
 	if errW := os.WriteFile(watchdogFile, []byte(content), 0755); errW != nil {
 		return errors.Verify("Failed to write to watchdog file", errW)
@@ -156,11 +163,9 @@ done`, runFile)
 	}
 
 	runBack("restarting service...")
-	go func() {
-		if _, rErr := deploy.RunCommand(ctx, "./restart.sh", nil); rErr != nil {
-			runBack(fmt.Sprintf("Failed to execute restart.sh: %v", rErr))
-		}
-	}()
+	if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", "nohup ./restart.sh > restart.log 2>&1 &"); rErr != nil {
+		runBack(fmt.Sprintf("Failed to execute restart.sh in background: %v", rErr))
+	}
 
 	return nil
 }
@@ -172,38 +177,41 @@ func (a appService) RestartSuccess(ctx *gin.Context, id, itemID string) {
 		logger.Error(ctx, "Failed to get local startID")
 		return
 	}
-	if localID != id {
-		logger.Error(ctx, "StartID mismatch")
-		return
-	}
-	go func() {
-		if err := cache.New[string](cache.JSON).Del(startIDKey); err != nil {
-			logger.Error(ctx, "Failed to delete local startID")
+
+	if localID != "" {
+		if localID != id {
+			logger.Error(ctx, fmt.Sprintf("Local startID %s does not match request startID %s", localID, id))
 			return
 		}
-	}()
+		go func() {
+			if err := cache.New[string](cache.JSON).Del(startIDKey); err != nil {
+				logger.Error(ctx, "Failed to delete local startID")
+				return
+			}
+		}()
 
-	go func() {
 		if itemID != "" {
-			messagex.PublishNewMsg(ctx, deploy.TopicRunStarted, map[string]string{
-				"itemID": itemID,
-			})
-		}
-	}()
-
-	go func() {
-		if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
-			logger.Error(ctx, "Failed to start watchdog service")
-			return
+			go func() {
+				messagex.PublishNewMsg(ctx, deploy.TopicRunStarted, map[string]string{
+					"itemID": itemID,
+				})
+			}()
 		}
 
-		if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
-			logger.Error(ctx, "Failed to start watchdog service")
-			return
-		} else {
-			logger.Info(ctx, "Watchdog service started.")
-		}
-	}()
+		go func() {
+			if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
+				logger.Error(ctx, "Failed to start watchdog service")
+				return
+			}
+
+			if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
+				logger.Error(ctx, "Failed to start watchdog service")
+				return
+			} else {
+				logger.Info(ctx, "Watchdog service started.")
+			}
+		}()
+	}
 
 	//	time.Sleep(3 * time.Second)
 	//	var runErr *errors.Error

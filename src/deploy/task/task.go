@@ -106,6 +106,27 @@ func (t taskService) Start(ctx context.Context, auto bool) *errors.Error {
 	return nil
 }
 
+func (t taskService) Stop(ctx context.Context, id string) *errors.Error {
+	logger.Info(ctx, fmt.Sprintf("Stopping task: %s", id))
+	cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+	get, err := cachePage.Get(map[string]any{"id": id})
+	if err != nil {
+		return errors.Verify(err.Error())
+	}
+	if get == nil {
+		return errors.Verify("Task not found")
+	}
+	if get.Status != Running && get.Status != Waiting {
+		return errors.Verify("Task not running or waiting")
+	}
+	get.Storage = cachePage
+	get.Running(fmt.Sprintf("Stopping task %s", id))
+	get.Status = Canceled
+	get.Running(fmt.Sprintf("Task %s stopped", id), Warn)
+	return nil
+
+}
+
 func (t taskService) Page(ctx context.Context, page, size int64) (*cache.PageCache[TaskRecord], *errors.Error) {
 	//logger.Info(ctx, fmt.Sprintf("Getting task page: %d, %d", page, size))
 	if page <= 0 {
@@ -214,6 +235,10 @@ func (t taskService) deploy(ctx context.Context) {
 		}
 	}()
 
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, TimeOut)
+	defer cancel()
+
 	storage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
 	// if there are tasks running, do not execute
 	runningItems, err := storage.Find(0, 1, map[string]any{"status": Running}, cache.PageSorterAsc("createAt"))
@@ -239,10 +264,6 @@ func (t taskService) deploy(ctx context.Context) {
 
 	if item.Status == Waiting {
 		logger.Info(ctx, fmt.Sprintf("Running task: %s", item.ID))
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, TimeOut)
-		defer cancel()
-
 		topic := fmt.Sprintf("%s.%s", deploy.TopicRunTimeout, logger.GetTraceID(ctx))
 		var rID uint64
 		rID, _ = messagex.RegisterTopic(topic, func(msg *messagex.Message) *errors.Error {
@@ -261,13 +282,16 @@ func (t taskService) deploy(ctx context.Context) {
 		item.Ctx = ctx
 		item.Storage = storage
 		item.Running(fmt.Sprintf("Running task %s", item.ID))
-		item.Running(fmt.Sprintf("Repository: %s, Branch: %s", item.Repo, item.Branch))
 
 		codeDir := filepath.Join(workDir, "code")
-		t.clone(ctx, codeDir, item)
-		defer func() {
-			_ = os.RemoveAll(codeDir)
-		}()
+		if !item.RB {
+			item.Running(fmt.Sprintf("Repository: %s, Branch: %s", item.Repo, item.Branch))
+			t.clone(ctx, codeDir, item)
+			defer func() {
+				_ = os.RemoveAll(codeDir)
+			}()
+		}
+
 		if item.Status != Running {
 			return
 		}
@@ -469,7 +493,6 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 		return
 	} else {
 		item.BuildFile = backupPath
-		item.RBStatus = Ready
 		item.Running(fmt.Sprintf("Copied file to backup directory: %s", backupPath), Light)
 	}
 
@@ -488,6 +511,7 @@ func (t taskService) StartedListen() {
 			logger.Error(ctx, fmt.Sprintf("Error getting task item: %v", err))
 			return nil
 		}
+		logger.Info(ctx, fmt.Sprintf("Task start item: %v", item))
 		if item == nil {
 			logger.Error(ctx, "Task item not found")
 			return nil
@@ -496,10 +520,12 @@ func (t taskService) StartedListen() {
 		item.Running(fmt.Sprintf("Task started: %s", id))
 		item.Status = Success
 		item.FinishAt = time.Now()
+		item.Storage = cachePage
+		item.RBStatus = Ready
 		item.Running(fmt.Sprintf("Deploy task finished successfully"), Light)
 
 		go func() {
-			time.Sleep(1000 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 			_ = messagex.UnSubscribe(deploy.TopicRunStarted, rid)
 		}()
 		return nil
