@@ -515,7 +515,7 @@ func (t taskService) StartedListen() {
 			logger.Error(ctx, "Task item not found")
 			return nil
 		}
-
+		item.Running(fmt.Sprintf("Watchdog service started."))
 		item.Running(fmt.Sprintf("Task started: %s", id))
 		item.Status = Success
 		item.FinishAt = time.Now()

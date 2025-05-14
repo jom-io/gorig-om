@@ -189,14 +189,6 @@ func (a appService) RestartSuccess(ctx context.Context, id, itemID string) {
 			}
 		}()
 
-		if itemID != "" {
-			go func() {
-				messagex.PublishNewMsg(ctx, deploy.TopicRunStarted, map[string]string{
-					"itemID": itemID,
-				})
-			}()
-		}
-
 		go func() {
 			if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
 				logger.Error(ctx, "Failed to start watchdog service")
@@ -208,6 +200,14 @@ func (a appService) RestartSuccess(ctx context.Context, id, itemID string) {
 				return
 			} else {
 				logger.Info(ctx, "Watchdog service started.")
+			}
+
+			if itemID != "" {
+				go func() {
+					messagex.PublishNewMsg(ctx, deploy.TopicRunStarted, map[string]string{
+						"itemID": itemID,
+					})
+				}()
 			}
 		}()
 	}
