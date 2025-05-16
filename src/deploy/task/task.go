@@ -432,10 +432,12 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 			useChinaProxy = true
 		}
 		if useChinaProxy {
-			envs = append(envs, deployEnv.GoEnv{
-				Key:   "GOPROXY",
-				Value: "https://goproxy.cn,direct",
-			})
+			envs = append([]deployEnv.GoEnv{
+				{
+					Key:   "GOPROXY",
+					Value: "https://goproxy.cn,direct",
+				},
+			}, envs...)
 			if setErr := deployEnv.Env.GoEnvSet(ctx, envs); setErr != nil {
 				item.Running(fmt.Sprintf("Error setting Go environment: %v", setErr), Warn)
 			}
