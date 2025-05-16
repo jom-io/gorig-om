@@ -341,6 +341,8 @@ func versionCompare(version1, version2 string) int {
 var EnvDefault = []GoEnv{
 	{"GOARCH", "amd64", true},
 	{"GOOS", "linux", true},
+	{"CGO_ENABLED", "0", false},
+	{"GO111MODULE", "on", false},
 }
 
 func (c envService) GoEnvSet(ctx context.Context, env []GoEnv) *errors.Error {
@@ -372,7 +374,7 @@ func (c envService) GoEnvSet(ctx context.Context, env []GoEnv) *errors.Error {
 					break
 				}
 			}
-			if !found {
+			if !found && !e.Default {
 				deleteEnvs = append(deleteEnvs, e.Key)
 			}
 		}
@@ -403,8 +405,6 @@ func (c envService) GoEnvGet(ctx context.Context) []GoEnv {
 	if env == nil {
 		env = []GoEnv{}
 		env = append(env, EnvDefault...)
-		env = append(env, GoEnv{"CGO_ENABLED", "0", false})
-		env = append(env, GoEnv{"GO111MODULE", "on", false})
 		if e := c.GoEnvSet(ctx, env); e != nil {
 			logger.Error(ctx, fmt.Sprintf("Goenv init failed to set go env %v", e))
 			return nil

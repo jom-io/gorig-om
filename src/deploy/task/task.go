@@ -445,11 +445,11 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 	}
 
 	for _, env := range envs {
-		if log, err := deploy.RunCommand(ctx, "go", deploy.DefOpts().SetDir(codeDir), "env", "-w", fmt.Sprintf("%s=%s", env.Key, env.Value)); err != nil {
+		if log, err := deploy.RunCommand(ctx, "go", deploy.DefOpts(), "env", "-w", fmt.Sprintf("%s=%s", env.Key, env.Value)); err != nil {
 			item.Running(fmt.Sprintf("Error setting Go environment: %v", err), Error)
 			return
 		} else {
-			item.Running(fmt.Sprintf("Set Go environment: env %s=%s, %s", env.Key, env.Value, log))
+			item.Running(fmt.Sprintf("Set Go environment: env %s=%s %s", env.Key, env.Value, log))
 		}
 	}
 
