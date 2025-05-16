@@ -135,6 +135,8 @@ func (t taskService) Page(ctx context.Context, page, size int64) (*cache.PageCac
 	if size <= 0 {
 		size = 10
 	}
+	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
 	result, err := cachePage.Find(page, size, nil, cache.PageSorterDesc("createAt"))
 	if err != nil {
@@ -283,18 +285,19 @@ func (t taskService) deploy(ctx context.Context) {
 		item.Running(fmt.Sprintf("Running task %s", item.ID))
 
 		codeDir := filepath.Join(workDir, "code")
+		mainDir := filepath.Join(codeDir, "main")
 		if !item.RB {
 			item.Running(fmt.Sprintf("Repository: %s, Branch: %s", item.Repo, item.Branch))
-			t.clone(ctx, codeDir, item)
+			t.clone(ctx, codeDir, mainDir, item)
 			defer func() {
-				_ = os.RemoveAll(codeDir)
+				//_ = os.RemoveAll(codeDir)
 			}()
 		}
 
 		if item.Status != Running {
 			return
 		}
-		runFile := t.buildFile(ctx, codeDir, item)
+		runFile := t.buildFile(ctx, mainDir, item)
 
 		if item.Status != Running {
 			return
@@ -310,7 +313,7 @@ func (t taskService) deploy(ctx context.Context) {
 	}
 }
 
-func (t taskService) clone(ctx context.Context, codeDir string, item *TaskRecord) {
+func (t taskService) clone(ctx context.Context, codeDir, mainDir string, item *TaskRecord) {
 	logger.Info(ctx, fmt.Sprintf("Cloning repository: %s", item.Repo))
 
 	item.Running(fmt.Sprintf("Cloning repository: %s, %s", item.Repo, item.Branch), Light)
@@ -339,19 +342,42 @@ func (t taskService) clone(ctx context.Context, codeDir string, item *TaskRecord
 		item.Running(fmt.Sprintf("Made code directory: %s", codeDir), Light)
 	}
 
+	if err := os.MkdirAll(mainDir, 0755); err != nil {
+		item.Running(fmt.Sprintf("Error making main directory: %v", err), Error)
+		return
+	} else {
+		item.Running(fmt.Sprintf("Made main directory: %s", mainDir), Light)
+	}
+
 	item.Running(fmt.Sprintf("Cloning repository: %s %s", item.Repo, item.Branch))
-	if _, err := deploy.RunCommand(ctx, "git", deploy.DefOpts().SetTimeOut(2*time.Minute), "clone", "--depth", "1", "-b", item.Branch, item.Repo, codeDir); err != nil {
+	if _, err := deploy.RunCommand(ctx, "git", deploy.DefOpts().SetTimeOut(2*time.Minute), "clone", "--depth", "1", "-b", item.Branch, item.Repo, mainDir); err != nil {
 		item.Running(fmt.Sprintf("Error cloning repository: %v", err), Error)
 		return
 	} else {
-		item.Running(fmt.Sprintf("Cloned repository: %s", codeDir), Light)
+		item.Running(fmt.Sprintf("Cloned repository: %s", mainDir), Light)
+	}
+
+	if item.OtherRepos != nil && len(*item.OtherRepos) > 0 {
+		for _, other := range *item.OtherRepos {
+			otherDir := filepath.Join(codeDir, other.Dir)
+			if other.Repo == "" || other.Branch == "" {
+				continue
+			}
+			item.Running(fmt.Sprintf("Cloning repository: %s %s", other.Repo, other.Branch))
+			if _, err := deploy.RunCommand(ctx, "git", deploy.DefOpts().SetTimeOut(2*time.Minute), "clone", "--depth", "1", "-b", other.Branch, other.Repo, otherDir); err != nil {
+				item.Running(fmt.Sprintf("Error cloning repository: %v", err), Error)
+				return
+			} else {
+				item.Running(fmt.Sprintf("Cloned repository: %s", otherDir), Light)
+			}
+		}
 	}
 
 	// commit git log -1 --pretty=%B
 	//item.Running(fmt.Sprintf("Getting commit message..."))
 	env := []string{
-		fmt.Sprintf("GIT_DIR=%s/.git", codeDir),
-		fmt.Sprintf("GIT_WORK_TREE=%s", codeDir),
+		fmt.Sprintf("GIT_DIR=%s/.git", mainDir),
+		fmt.Sprintf("GIT_WORK_TREE=%s", mainDir),
 	}
 	if commit, err := deploy.RunCommand(ctx, "git", deploy.DefOpts().SetEnv(env), "log", "-1", "--pretty=%B"); err != nil {
 		item.Running(fmt.Sprintf("Error getting commit message: %v", err), Error)

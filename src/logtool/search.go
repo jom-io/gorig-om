@@ -3,19 +3,24 @@ package logtool
 import (
 	"bufio"
 	"encoding/json"
+	errck "errors"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gin-gonic/gin"
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
 	"github.com/spf13/cast"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+const maxLineSize = 1024 * 1024 // 1MB max per JSON line
 
 func ListLogFiles(opts SearchOptions) (map[string]string, error) {
 	if opts.RootDir == "" {
@@ -47,6 +52,14 @@ func ListLogFiles(opts SearchOptions) (map[string]string, error) {
 		}
 	}
 
+	var startTime, endTime time.Time
+	if opts.StartTime != "" {
+		startTime, _ = time.ParseInLocation("2006-01-02 15:04:05", opts.StartTime, time.Local)
+	}
+	if opts.EndTime != "" {
+		endTime, _ = time.ParseInLocation("2006-01-02 15:04:05", opts.EndTime, time.Local)
+	}
+
 	for _, cat := range newCategories {
 		catDir := filepath.Join(logDir, cat)
 		_ = filepath.Walk(catDir, func(path string, info fs.FileInfo, err error) error {
@@ -61,20 +74,50 @@ func ListLogFiles(opts SearchOptions) (map[string]string, error) {
 						fileTime = strings.TrimPrefix(fileTime, cat+"-")
 						parseTime, e := time.Parse("2006-01-02T15-04-05.000", fileTime)
 						if e != nil {
-							//logger.Warn(nil, "parse file time error", zap.Error(e))
 							return nil
 						}
+						localTime := parseTime.In(time.Local)
+
 						if opts.StartTime != "" {
-							startTime, _ := time.Parse("2006-01-02 15:04:05", opts.StartTime)
-							if parseTime.Before(startTime) {
+							if localTime.Before(startTime) {
 								return nil
 							}
 						}
-						if opts.EndTime != "" {
-							endTime, _ := time.Parse("2006-01-02 15:04:05", opts.EndTime)
-							if parseTime.After(endTime) {
+					}
+					if opts.EndTime != "" {
+						f, openErr := os.Open(path)
+						if openErr != nil {
+							return nil
+						}
+						defer f.Close()
+
+						reader := bufio.NewReader(f)
+						firstLine := ""
+						for i := 0; i < 10; i++ {
+							line, errRead := reader.ReadString('\n')
+							if errRead != nil && !errck.Is(errRead, io.EOF) {
 								return nil
 							}
+							if len(line) > maxLineSize && !endsWithNewline(line) {
+								skipRestOfLine(reader)
+								continue
+							}
+							if strings.TrimSpace(line) == "" {
+								continue
+							}
+							firstLine = line
+							break
+						}
+						if firstLine == "" {
+							return nil
+						}
+						rec := parseLineToLogRecord(firstLine)
+						if rec == nil {
+							return nil
+						}
+						endParseTime, _ := rec.ParsedTime()
+						if endParseTime.After(endTime) {
+							return nil
 						}
 					}
 					result[path] = info.Name()
@@ -102,20 +145,21 @@ func SearchLogs(opts SearchOptions) ([]MatchedRecord, *errors.Error) {
 		return nil, errors.Verify(err.Error())
 	}
 
+	fileList := make([]string, 0)
+	for _, v := range files {
+		fileList = append(fileList, v)
+	}
+	logger.Info(nil, "log files", zap.Any("files", fileList))
+
 	var matchedRecords []MatchedRecord
 	var matchedCount int
 	lastRecordFound := false
-	startProcessing := false
+	startProcessing := opts.LastPath == ""
 
-	if opts.LastPath == "" {
-		startProcessing = true
-	}
-
-	for filePath, _ := range files {
+	for filePath := range files {
 		if !startProcessing && filePath == opts.LastPath {
 			startProcessing = true
 		}
-
 		if !startProcessing {
 			continue
 		}
@@ -126,40 +170,57 @@ func SearchLogs(opts SearchOptions) ([]MatchedRecord, *errors.Error) {
 		}
 		defer f.Close()
 
-		scanner := bufio.NewScanner(f)
+		reader := bufio.NewReader(f)
 		var lineNumber int64 = 0
-		for scanner.Scan() {
+
+		for {
+			line, err := reader.ReadString('\n')
 			lineNumber++
+
 			if filePath == opts.LastPath && lineNumber <= opts.LastLine {
-				continue // Continue from last line
+				if err == io.EOF {
+					break
+				}
+				continue
 			}
 
-			line := scanner.Text()
+			if len(line) > maxLineSize && !endsWithNewline(line) {
+				skipRestOfLine(reader)
+			}
+
 			if strings.TrimSpace(line) == "" {
+				if err == io.EOF {
+					break
+				}
 				continue
 			}
 
-			var recMap map[string]interface{}
-			if errR := json.Unmarshal([]byte(line), &recMap); errR != nil {
-				//logger.Error(nil, "unmarshal record error", zap.Error(errR))
+			if !preFilter(line, opts) {
 				continue
 			}
 
-			rec := map2LogRecord(recMap)
+			//var recMap map[string]interface{}
+			//if err := json.Unmarshal([]byte(line), &recMap); err != nil {
+			//	continue
+			//}
+			//rec := map2LogRecord(recMap)
+			rec := parseLineToLogRecord(line)
 
-			if matchRecord(*rec, opts) {
+			if postFilter(*rec, opts) {
 				matchedRecords = append(matchedRecords, MatchedRecord{
 					FilePath:   filePath,
 					LineNumber: lineNumber,
 					Record:     rec,
 				})
 				matchedCount++
-
-				// If matched count reaches the limit, stop searching
 				if matchedCount >= opts.Size {
 					lastRecordFound = true
 					break
 				}
+			}
+
+			if err == io.EOF {
+				break
 			}
 		}
 
@@ -169,6 +230,71 @@ func SearchLogs(opts SearchOptions) ([]MatchedRecord, *errors.Error) {
 	}
 
 	return matchedRecords, nil
+}
+
+func preFilter(line string, opts SearchOptions) bool {
+	if opts.Level != "" && !strings.Contains(line, `"level":"`+opts.Level+`"`) {
+		return false
+	}
+	if opts.TraceID != "" && !strings.Contains(line, `"_trace_id_":"`+opts.TraceID+`"`) {
+		return false
+	}
+	if opts.Keyword != "" && !strings.Contains(line, opts.Keyword) {
+		return false
+	}
+	return true
+}
+
+func postFilter(r LogRecord, opts SearchOptions) bool {
+	if opts.TraceID != "" && r.TraceID != opts.TraceID {
+		return false
+	}
+
+	pt, err := r.ParsedTime()
+	if err != nil {
+		return false
+	}
+
+	if strings.TrimSpace(opts.StartTime) != "" {
+		startTime, err := time.ParseInLocation("2006-01-02 15:04:05", opts.StartTime, time.Local)
+		if err != nil {
+			return false
+		}
+		if !startTime.IsZero() && pt.Before(startTime) {
+			return false
+		}
+	}
+
+	if strings.TrimSpace(opts.EndTime) != "" {
+		endTime, err := time.ParseInLocation("2006-01-02 15:04:05", opts.EndTime, time.Local)
+		if err != nil {
+			return false
+		}
+		if !endTime.IsZero() && pt.After(endTime) {
+			return false
+		}
+	}
+
+	if opts.Keyword != "" {
+		kw := opts.Keyword
+		if strings.Contains(r.Msg, kw) {
+			return true
+		}
+		if strings.Contains(r.Error, kw) {
+			return true
+		}
+		if r.Data != nil {
+			for _, v := range r.Data {
+				if strings.Contains(v, kw) {
+					return true
+				}
+			}
+			return false
+		}
+		return false
+	}
+
+	return true
 }
 
 // matchRecord Match a log record with search options
@@ -189,7 +315,7 @@ func matchRecord(r LogRecord, opts SearchOptions) bool {
 		return false
 	}
 	if strings.TrimSpace(opts.StartTime) != "" {
-		startTime, err := time.Parse("2006-01-02 15:04:05", opts.StartTime)
+		startTime, err := time.ParseInLocation("2006-01-02 15:04:05", opts.StartTime, time.Local)
 		if err != nil {
 			return false
 		}
@@ -199,7 +325,7 @@ func matchRecord(r LogRecord, opts SearchOptions) bool {
 	}
 
 	if strings.TrimSpace(opts.EndTime) != "" {
-		endTime, err := time.Parse("2006-01-02 15:04:05", opts.EndTime)
+		endTime, err := time.ParseInLocation("2006-01-02 15:04:05", opts.EndTime, time.Local)
 		if err != nil {
 			return false
 		}
@@ -238,7 +364,6 @@ type ContextLogLine struct {
 	Record     *LogRecord `json:"record"`
 }
 
-// FetchContextLines Read context lines around the center line
 func FetchContextLines(filePath string, centerLine, contextRange int64) ([]ContextLogLine, *errors.Error) {
 	if centerLine < 1 {
 		return nil, errors.Verify("center line must be greater than 0")
@@ -253,28 +378,45 @@ func FetchContextLines(filePath string, centerLine, contextRange int64) ([]Conte
 	}
 	endLine := centerLine + contextRange
 
-	var result []ContextLogLine
-
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, errors.Verify(fmt.Sprintf("open file error: %v", err))
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
+	reader := bufio.NewReader(f)
+	var result []ContextLogLine
 	var currentLine int64 = 0
-	for scanner.Scan() {
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return nil, errors.Verify(fmt.Sprintf("read line error: %v", err))
+		}
+
 		currentLine++
 		if currentLine < startLine {
+			if len(line) > maxLineSize && !endsWithNewline(line) {
+				skipRestOfLine(reader)
+			}
+			if err == io.EOF {
+				break
+			}
 			continue
 		}
 		if currentLine > endLine {
 			break
 		}
 
-		text := scanner.Text()
+		if len(line) > maxLineSize {
+			if !endsWithNewline(line) {
+				skipRestOfLine(reader)
+			}
+			continue
+		}
+
 		dataMap := map[string]interface{}{}
-		if err := json.Unmarshal([]byte(text), &dataMap); err != nil {
+		if err := json.Unmarshal([]byte(line), &dataMap); err != nil {
 			//logger.Error(nil, "unmarshal record error", zap.Error(err))
 			continue
 		}
@@ -282,12 +424,29 @@ func FetchContextLines(filePath string, centerLine, contextRange int64) ([]Conte
 		result = append(result, ContextLogLine{
 			FilePath:   filePath,
 			LineNumber: currentLine,
-			Content:    text,
+			Content:    line,
 			Record:     rec,
 		})
+
+		if err == io.EOF {
+			break
+		}
 	}
 
 	return result, nil
+}
+
+func endsWithNewline(line string) bool {
+	return len(line) > 0 && line[len(line)-1] == '\n'
+}
+
+func skipRestOfLine(reader *bufio.Reader) {
+	for {
+		b, err := reader.ReadByte()
+		if err != nil || b == '\n' {
+			break
+		}
+	}
 }
 
 // MonitorLogs monitors logs based on categories and conditions in real-time
@@ -399,6 +558,33 @@ func map2LogRecord(dataMap map[string]interface{}) *LogRecord {
 	return rec
 }
 
+func parseLineToLogRecord(line string) *LogRecord {
+	rec := &LogRecord{
+		Level:   gjson.Get(line, "level").String(),
+		Time:    gjson.Get(line, "time").String(),
+		TraceID: gjson.Get(line, "_trace_id_").String(),
+		Msg:     gjson.Get(line, "msg").String(),
+		Error:   gjson.Get(line, "error").String(),
+		Data:    map[string]string{},
+	}
+
+	gjson.Parse(line).ForEach(func(key, value gjson.Result) bool {
+		k := key.String()
+		if k == "level" || k == "time" || k == "_trace_id_" || k == "msg" || k == "error" {
+			return true
+		}
+		v := value.String()
+		if v == "" {
+			rec.Data[k] = value.Raw
+		} else {
+			rec.Data[k] = v
+		}
+		return true
+	})
+
+	return rec
+}
+
 // readLastRecord
 func readLastRecord(f *os.File) (*MatchedRecord, *errors.Error) {
 	fi, err := f.Stat()
@@ -427,13 +613,14 @@ func readLastRecord(f *os.File) (*MatchedRecord, *errors.Error) {
 					continue
 				}
 
-				dataMap := map[string]interface{}{}
-				if err := json.Unmarshal([]byte(line), &dataMap); err != nil {
-					//logger.Error(nil, "unmarshal record error", zap.Error(err))
-					return nil, nil
-				}
+				//dataMap := map[string]interface{}{}
+				//if err := json.Unmarshal([]byte(line), &dataMap); err != nil {
+				//	//logger.Error(nil, "unmarshal record error", zap.Error(err))
+				//	return nil, nil
+				//}
 
-				record := map2LogRecord(dataMap)
+				//record := map2LogRecord(dataMap)
+				record := parseLineToLogRecord(line)
 				result := &MatchedRecord{
 					FilePath:   f.Name(),
 					LineNumber: -1,

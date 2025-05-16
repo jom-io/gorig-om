@@ -17,7 +17,7 @@ type LogRecord struct {
 
 func (r *LogRecord) ParsedTime() (time.Time, error) {
 	layout := "2006-01-02 15:04:05.000"
-	return time.Parse(layout, r.Time)
+	return time.ParseInLocation(layout, r.Time, time.Local)
 }
 
 func (r *LogRecord) Validate() error {
