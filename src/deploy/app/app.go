@@ -12,8 +12,10 @@ import (
 	"github.com/jom-io/gorig/utils/logger"
 	"github.com/jom-io/gorig/utils/sys"
 	"github.com/rs/xid"
+	"github.com/spf13/cast"
 	"os"
 	"strings"
+	"time"
 )
 
 var App appService
@@ -22,6 +24,7 @@ type appService struct {
 }
 
 const startIDKey = "startID"
+const startTimeKey = "startTime"
 
 var watchdogFile string
 
@@ -89,6 +92,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	reStartAddr := fmt.Sprintf("http://127.0.0.1%s/om/app/restarted?startID=%s&itemID=%s", port, startID, itemID)
 
 	content := fmt.Sprintf(`#!/bin/bash
+    echo "$(date)"
 	echo "Service restarting..."
 	echo "Stopping service..."
 	pkill -15 -f %s
@@ -171,9 +175,15 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 
 func (a appService) RestartSuccess(ctx context.Context, id, itemID string) {
 	logger.Info(ctx, "Restarting application...")
-	localID, err := cache.New[string](cache.JSON).Get(startIDKey)
+	c := cache.New[string](cache.JSON)
+	localID, err := c.Get(startIDKey)
 	if err != nil {
 		logger.Error(ctx, "Failed to get local startID")
+		return
+	}
+
+	if se := c.Set(startTimeKey, cast.ToString(time.Now().UnixMilli()), 0); se != nil {
+		logger.Error(ctx, "Failed to set start time")
 		return
 	}
 

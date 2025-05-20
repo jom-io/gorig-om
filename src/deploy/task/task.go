@@ -290,7 +290,7 @@ func (t taskService) deploy(ctx context.Context) {
 			item.Running(fmt.Sprintf("Repository: %s, Branch: %s", item.Repo, item.Branch))
 			t.clone(ctx, codeDir, mainDir, item)
 			defer func() {
-				//_ = os.RemoveAll(codeDir)
+				_ = os.RemoveAll(codeDir)
 			}()
 		}
 
@@ -544,7 +544,7 @@ func (t taskService) StartedListen() {
 			return nil
 		}
 		item.Running(fmt.Sprintf("Watchdog service started."))
-		item.Running(fmt.Sprintf("Task started: %s", id))
+		item.Running(fmt.Sprintf("Task item started: %s", id))
 		item.Status = Success
 		item.FinishAt = time.Now()
 		item.Storage = cachePage
