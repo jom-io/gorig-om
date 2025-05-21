@@ -31,6 +31,7 @@ var watchdogFile string
 func init() {
 	App = appService{}
 	watchdogFile = fmt.Sprintf("%s_%s_%s.sh", "watchdog", variable.SysName, sys.RunMode)
+	watchdogFile = strings.ToLower(watchdogFile)
 }
 
 type RunBack func(log string)
