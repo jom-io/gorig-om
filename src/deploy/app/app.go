@@ -166,7 +166,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 		runBack("Watchdog service stopped.")
 	}
 
-	runBack("restarting service...")
+	runBack("Restarting service...")
 	if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", "nohup ./restart.sh > restart.log 2>&1 &"); rErr != nil {
 		runBack(fmt.Sprintf("Failed to execute restart.sh in background: %v", rErr))
 	}

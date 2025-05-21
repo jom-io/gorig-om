@@ -630,14 +630,19 @@ func (t taskService) CleanBackup() {
 			logger.Error(ctx, fmt.Sprintf("Error removing backup file: %v", err))
 		} else {
 			logger.Info(ctx, fmt.Sprintf("Removed backup file: %s", filePath))
-			item, err := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite).Get(map[string]any{"buildFile": filePath})
+			items, err := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite).Find(0, 100, map[string]any{"buildFile": filePath})
 			if err != nil {
 				logger.Error(ctx, fmt.Sprintf("Error getting task item: %v", err))
 			} else {
-				item.RBStatus = Cleaned
-				item.Running(fmt.Sprintf("Backup file %s removed", filePath), Warn)
-				if err := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite).Update(map[string]any{"id": item.ID}, item); err != nil {
-					logger.Error(ctx, fmt.Sprintf("Error updating task item: %v", err))
+				if len(items.Items) == 0 {
+					continue
+				}
+				for _, item := range items.Items {
+					item.RBStatus = Cleaned
+					item.Running(fmt.Sprintf("Backup file %s removed", filePath), Warn)
+					if err := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite).Update(map[string]any{"id": item.ID}, item); err != nil {
+						logger.Error(ctx, fmt.Sprintf("Error updating task item: %v", err))
+					}
 				}
 			}
 		}
