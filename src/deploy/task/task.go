@@ -453,9 +453,18 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 		}
 	}
 
+	if _, err := deploy.RunCommand(ctx, "sh", deploy.DefOpts(), "-c", `mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/known_hosts && chmod 644 ~/.ssh/known_hosts && ssh-keyscan github.com >> ~/.ssh/known_hosts`); err != nil {
+		item.Running(fmt.Sprintf("Error setting SSH known hosts: %v", err), Error)
+		return
+	} else {
+		item.Running(fmt.Sprintf("Set SSH known hosts"))
+	}
+
 	if _, err := deploy.RunCommand(ctx, "git", deploy.DefOpts(), "config", "--global", "url.git@github.com:.insteadOf", "https://github.com/"); err != nil {
 		item.Running(fmt.Sprintf("Error setting git config: %v", err), Error)
 		return
+	} else {
+		item.Running(fmt.Sprintf("Set git config"))
 	}
 
 	item.Running(fmt.Sprintf("Running go mod tidy..."))

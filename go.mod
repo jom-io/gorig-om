@@ -9,7 +9,7 @@ replace github.com/jom-io/gorig => ../gorig
 require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gin-gonic/gin v1.9.1
-	github.com/jom-io/gorig v0.0.41
+	github.com/jom-io/gorig v0.0.43
 	github.com/rs/xid v1.5.0
 	github.com/spf13/cast v1.6.0
 	go.uber.org/zap v1.27.0

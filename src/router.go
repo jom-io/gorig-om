@@ -10,6 +10,7 @@ import (
 	"github.com/jom-io/gorig-om/src/omuser"
 	"github.com/jom-io/gorig/global/variable"
 	"github.com/jom-io/gorig/httpx"
+	_ "github.com/tidwall/gjson"
 )
 
 func init() {
