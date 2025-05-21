@@ -30,7 +30,7 @@ var watchdogFile string
 
 func init() {
 	App = appService{}
-	watchdogFile = fmt.Sprintf("%s_%s.sh", "watchdog", sys.RunMode)
+	watchdogFile = fmt.Sprintf("%s_%s_%s.sh", "watchdog", variable.SysName, sys.RunMode)
 }
 
 type RunBack func(log string)
@@ -159,7 +159,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	} else {
 		runBack("Stopping watchdog service...")
 	}
-	if _, rErr := deploy.RunCommand(ctx, "pkill", nil, "-9", "-f", fmt.Sprintf("watchdog_%s.sh", sys.RunMode)); rErr != nil {
+	if _, rErr := deploy.RunCommand(ctx, "pkill", nil, "-9", "-f", watchdogFile); rErr != nil {
 		return rErr
 	} else {
 		runBack("Watchdog service stopped.")
