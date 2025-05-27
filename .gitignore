@@ -57,6 +57,7 @@ _bin/
 *.cache
 .deploy
 *.linux64
+restart_logs
 
 # Go workspace file
 go.work

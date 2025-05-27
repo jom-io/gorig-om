@@ -19,7 +19,7 @@ func GetLevels(ctx *gin.Context) {
 func Search(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
 	opts := SearchOptions{}
-	e := apix.BindParams(ctx, &opts)
+	e := apix.BindParams(ctx, &opts, true)
 	if e != nil {
 		return
 	}
@@ -42,7 +42,7 @@ func Near(ctx *gin.Context) {
 func Monitor(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
 	opts := SearchOptions{}
-	e := apix.BindParams(ctx, &opts)
+	e := apix.BindParams(ctx, &opts, true)
 	if e != nil {
 		return
 	}

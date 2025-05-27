@@ -38,3 +38,21 @@ func TestStopApp(t *testing.T) {
 		return
 	}
 }
+
+func TestRestartLogs(t *testing.T) {
+	ctx := logger.NewCtx()
+
+	restartLog := &deploy.ReStartLog{}
+	if err := restartLog.Save(ctx, deploy.StartSrcManual, "Test restart log"); err != nil {
+		t.Errorf("Error saving restart log: %v", err)
+		return
+	}
+
+	status, err := deploy.ReStartPage(ctx, 0, 1)
+	if err != nil {
+		t.Errorf("Error: %v", err)
+		return
+	}
+
+	t.Logf("Status: %v", status.JSON())
+}

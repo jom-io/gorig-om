@@ -28,6 +28,7 @@ func Setup() {
 		runApp.Use(mid.Sign())
 		runApp.POST("restart", app.Restart)
 		runApp.POST("stop", app.Stop)
+		//runApp.GET("restart/logs", app.RestartLogs)
 
 		auth := om.Group("auth")
 		auth.POST("connect", omuser.Login)

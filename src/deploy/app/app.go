@@ -12,7 +12,7 @@ import (
 	"github.com/jom-io/gorig/utils/logger"
 	"github.com/jom-io/gorig/utils/sys"
 	"github.com/rs/xid"
-	"github.com/spf13/cast"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -24,7 +24,6 @@ type appService struct {
 }
 
 const startIDKey = "startID"
-const startTimeKey = "startTime"
 
 var watchdogFile string
 
@@ -80,6 +79,15 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 		logger.Info(nil, "Restart file permissions changed to executable")
 	}
 
+	src := StartSrcManual
+	if runBack == nil {
+		runBack = func(log string) {
+			logger.Info(ctx, log)
+		}
+	} else {
+		src = StartSrcDeploy
+	}
+
 	runBack("Service restart ...")
 
 	restartFile := "restart.sh"
@@ -95,6 +103,12 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	content := fmt.Sprintf(`#!/bin/bash
     echo "$(date)"
 	echo "Service restarting..."
+	if [ -z "$1" ]; then
+	   src="%s"
+	else
+	   src="$1"
+	fi
+    echo "Restart source: $src"
 	echo "Stopping service..."
 	pkill -15 -f %s
 	timeout=0
@@ -117,7 +131,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	echo "Checking service startup status..."
 	sleep 2
 	check_timeout=0
-	url="%s"
+	url="%s&pid=$pid&src=$src"
 	while true; do
 	   http_code=$(curl -s -o /dev/null -w "%%{http_code}" "$url")
 	   echo "Check $url => HTTP $http_code"
@@ -132,7 +146,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	   fi
 	   sleep 1
 	done
-	`, runFile, runFile, runFile, sys.RunMode, runFile, reStartAddr)
+	`, StartSrcManual, runFile, runFile, runFile, sys.RunMode, runFile, reStartAddr)
 
 	if errW := os.WriteFile(restartFile, []byte(content), 0755); errW != nil {
 		return errors.Verify("Failed to write to restart.sh file", errW)
@@ -146,10 +160,10 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	       echo "Service is not running. Restarting..."
 	       mkdir -p restart_logs
 	       cp nohup.out restart_logs/auto_restart_$(date +%%Y%%m%%d%%H%%M%%S).log
-	       ./restart.sh
+	       ./restart.sh %s
 	   fi
 	   sleep 5
-	done`, runFile)
+	done`, runFile, StartSrcCrash.String())
 
 	if errW := os.WriteFile(watchdogFile, []byte(content), 0755); errW != nil {
 		return errors.Verify("Failed to write to watchdog file", errW)
@@ -167,14 +181,14 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	}
 
 	runBack("Restarting service...")
-	if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", "nohup ./restart.sh > restart.log 2>&1 &"); rErr != nil {
+	if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./restart.sh %s > restart.log 2>&1 &", src.String())); rErr != nil {
 		runBack(fmt.Sprintf("Failed to execute restart.sh in background: %v", rErr))
 	}
 
 	return nil
 }
 
-func (a appService) RestartSuccess(ctx context.Context, id, itemID string) {
+func (a appService) RestartSuccess(ctx context.Context, startID, itemID, pid string, src StartSrc) {
 	logger.Info(ctx, "Restarting application...")
 	c := cache.New[string](cache.JSON)
 	localID, err := c.Get(startIDKey)
@@ -183,14 +197,57 @@ func (a appService) RestartSuccess(ctx context.Context, id, itemID string) {
 		return
 	}
 
-	if se := c.Set(startTimeKey, cast.ToString(time.Now().UnixMilli()), 0); se != nil {
-		logger.Error(ctx, "Failed to set start time")
-		return
-	}
+	go func() {
+		reStartLog := &ReStartLog{}
+		reStartLogFile := "restart.log"
+		log := ""
+		if _, errOs := os.Stat(reStartLogFile); os.IsNotExist(errOs) {
+			logger.Error(ctx, "Restart log file not found")
+			log = fmt.Sprintf("Restarted at %s with ID %s", time.Now().Format("2006-01-02 15:04:05"), startID)
+		} else {
+			logContent, errRead := os.ReadFile(reStartLogFile)
+			if errRead != nil {
+				logger.Error(ctx, "Failed to read restart log file")
+				return
+			}
+			log = string(logContent)
+		}
+		if src == StartSrcCrash {
+			restartLogs, err := os.ReadDir("restart_logs")
+			if err != nil {
+				logger.Error(ctx, "Failed to read restart_logs directory")
+				return
+			}
+			if len(restartLogs) > 0 {
+				latestLog := restartLogs[0]
+				for _, logFile := range restartLogs {
+					if logFile.IsDir() {
+						continue
+					}
+					if logFile.Name() > latestLog.Name() {
+						latestLog = logFile
+					}
+				}
+				logger.Info(ctx, fmt.Sprintf("Latest restart log file: %s", latestLog.Name()))
+				crashLog, errLog := readLastNLines("restart_logs/"+latestLog.Name(), 1000)
+				if errLog != nil {
+					logger.Error(ctx, "Failed to read last lines of latest restart log file")
+					return
+				}
+				log = fmt.Sprintf("%s\nCrash log:\n%s", log, crashLog)
+			} else {
+				log = fmt.Sprintf("%s\nNo crash logs found.", log)
+			}
+		}
+		if errStart := reStartLog.Save(ctx, src, log); errStart != nil {
+			logger.Error(ctx, "Failed to save restart log")
+			return
+		}
+	}()
 
 	if localID != "" {
-		if localID != id {
-			logger.Error(ctx, fmt.Sprintf("Local startID %s does not match request startID %s", localID, id))
+		if localID != startID {
+			logger.Error(ctx, fmt.Sprintf("Local startID %s does not match request startID %s", localID, startID))
 			return
 		}
 		go func() {
@@ -217,6 +274,7 @@ func (a appService) RestartSuccess(ctx context.Context, id, itemID string) {
 				go func() {
 					messagex.PublishNewMsg(ctx, deploy.TopicRunStarted, map[string]string{
 						"itemID": itemID,
+						"pid":    pid,
 					})
 				}()
 			}
@@ -308,4 +366,50 @@ func (a appService) Clean(ctx context.Context) *errors.Error {
 	}
 
 	return nil
+}
+
+func readLastNLines(path string, n int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var (
+		lines       []string
+		buffer      []byte
+		chunkSize   int64 = 4096
+		fileInfo, _       = f.Stat()
+		fileSize          = fileInfo.Size()
+		offset            = fileSize
+		leftover    []byte
+	)
+
+	for offset > 0 && len(lines) <= n {
+		if offset < chunkSize {
+			chunkSize = offset
+		}
+		offset -= chunkSize
+		buf := make([]byte, chunkSize)
+
+		_, err := f.ReadAt(buf, offset)
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+
+		buffer = append(buf, leftover...)
+		parts := strings.Split(string(buffer), "\n")
+		if len(parts) > 0 {
+			leftover = []byte(parts[0])
+			parts = parts[1:]
+		}
+
+		lines = append(parts, lines...)
+	}
+
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+
+	return strings.Join(lines, "\n"), nil
 }

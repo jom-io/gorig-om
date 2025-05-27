@@ -540,6 +540,7 @@ func (t taskService) StartedListen() {
 	ctx := logger.NewCtx()
 	rid, _ = messagex.RegisterTopic(deploy.TopicRunStarted, func(msg *messagex.Message) *errors.Error {
 		id := msg.GetValueStr("itemID")
+		pid := msg.GetValueStr("pid")
 		logger.Info(ctx, fmt.Sprintf("Task started: %s", id))
 		cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
 		item, err := cachePage.Get(map[string]any{"id": id})
@@ -553,7 +554,7 @@ func (t taskService) StartedListen() {
 			return nil
 		}
 		item.Running(fmt.Sprintf("Watchdog service started."))
-		item.Running(fmt.Sprintf("Task item started: %s", id))
+		item.Running(fmt.Sprintf("Task item started: %s, pid: %s", item.ID, pid), Light)
 		item.Status = Success
 		item.FinishAt = time.Now()
 		item.Storage = cachePage
