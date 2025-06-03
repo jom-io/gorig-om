@@ -5,6 +5,7 @@ import (
 	"github.com/jom-io/gorig-om/src/deploy/app"
 	dpGit "github.com/jom-io/gorig-om/src/deploy/env"
 	dpTask "github.com/jom-io/gorig-om/src/deploy/task"
+	"github.com/jom-io/gorig-om/src/host"
 	"github.com/jom-io/gorig-om/src/logtool"
 	"github.com/jom-io/gorig-om/src/mid"
 	"github.com/jom-io/gorig-om/src/omuser"
@@ -28,7 +29,7 @@ func Setup() {
 		runApp.Use(mid.Sign())
 		runApp.POST("restart", app.Restart)
 		runApp.POST("stop", app.Stop)
-		//runApp.GET("restart/logs", app.RestartLogs)
+		runApp.GET("restart/logs", app.RestartLogs)
 
 		auth := om.Group("auth")
 		auth.POST("connect", omuser.Login)
@@ -75,9 +76,8 @@ func Setup() {
 		task.GET("get", dpTask.Get)
 		task.POST("rollback", dpTask.Rollback)
 
-		//env := om.Group("env")
-		//env.GET("cpu", host.Cpu)
-		//env.GET("disk", disk)
-		//env.GET("mem", mem)
+		h := om.Group("host")
+		h.GET("usage", host.Usage)
+		h.GET("usage/time", host.TimeRange)
 	})
 }

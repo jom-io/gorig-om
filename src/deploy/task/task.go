@@ -42,8 +42,8 @@ func init() {
 		return
 	}
 	cronx.AddTask("*/10 * * * * *", autoCheck)
-	cronx.AddTask("* */1 * * * *", Task.timeOut)
-	cronx.AddTask("* */10 * * * *", Task.CleanBackup)
+	cronx.AddTask("*/10 * * * * *", Task.timeOut)
+	cronx.AddTask("0 */10 * * * *", Task.CleanBackup)
 	go Task.run()
 	go Task.StartedListen()
 }
@@ -99,7 +99,7 @@ func (t taskService) Start(ctx context.Context, auto bool) *errors.Error {
 	if auto {
 		taskRecord.CreateBy = "system"
 	}
-	if errRun := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite).Put(taskRecord); errRun != nil {
+	if errRun := cache.NewPager[TaskRecord](ctx, cache.Sqlite).Put(taskRecord); errRun != nil {
 		return errors.Verify(errRun.Error())
 	}
 
@@ -108,7 +108,7 @@ func (t taskService) Start(ctx context.Context, auto bool) *errors.Error {
 
 func (t taskService) Stop(ctx context.Context, id string) *errors.Error {
 	logger.Info(ctx, fmt.Sprintf("Stopping task: %s", id))
-	cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+	cachePage := cache.NewPager[TaskRecord](ctx, cache.Sqlite)
 	get, err := cachePage.Get(map[string]any{"id": id})
 	if err != nil {
 		return errors.Verify(err.Error())
@@ -137,7 +137,7 @@ func (t taskService) Page(ctx context.Context, page, size int64) (*cache.PageCac
 	}
 	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+	cachePage := cache.NewPager[TaskRecord](ctx, cache.Sqlite)
 	result, err := cachePage.Find(page, size, nil, cache.PageSorterDesc("createAt"))
 	if err != nil {
 		return nil, errors.Verify(err.Error())
@@ -147,7 +147,7 @@ func (t taskService) Page(ctx context.Context, page, size int64) (*cache.PageCac
 }
 
 func (t taskService) Get(ctx context.Context, id string) (*TaskRecord, *errors.Error) {
-	cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+	cachePage := cache.NewPager[TaskRecord](ctx, cache.Sqlite)
 	result, err := cachePage.Get(map[string]any{"id": id})
 	if err != nil {
 		return nil, errors.Verify(err.Error())
@@ -157,7 +157,7 @@ func (t taskService) Get(ctx context.Context, id string) (*TaskRecord, *errors.E
 
 func (t taskService) Rollback(ctx context.Context, id string) *errors.Error {
 	logger.Info(ctx, fmt.Sprintf("Rolling back task: %s", id))
-	cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+	cachePage := cache.NewPager[TaskRecord](ctx, cache.Sqlite)
 	get, err := cachePage.Get(map[string]any{"id": id})
 	if err != nil {
 		return errors.Verify(err.Error())
@@ -206,7 +206,7 @@ func autoCheck() {
 	}
 	hash := deployEnv.Env.GetLatestHash(ctx, opts.Repo, opts.Branch)
 
-	storage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+	storage := cache.NewPager[TaskRecord](ctx, cache.Sqlite)
 	item, getErr := storage.Get(map[string]any{"gitHash": hash})
 	if getErr != nil {
 		logger.Error(ctx, fmt.Sprintf("Error getting task item: %v", getErr))
@@ -240,7 +240,7 @@ func (t taskService) deploy(ctx context.Context) {
 	ctx, cancel = context.WithTimeout(ctx, TimeOut)
 	defer cancel()
 
-	storage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+	storage := cache.NewPager[TaskRecord](ctx, cache.Sqlite)
 	// if there are tasks running, do not execute
 	runningItems, err := storage.Find(0, 1, map[string]any{"status": Running}, cache.PageSorterAsc("createAt"))
 	if err != nil {
@@ -542,7 +542,7 @@ func (t taskService) StartedListen() {
 		id := msg.GetValueStr("itemID")
 		pid := msg.GetValueStr("pid")
 		logger.Info(ctx, fmt.Sprintf("Task started: %s", id))
-		cachePage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+		cachePage := cache.NewPager[TaskRecord](ctx, cache.Sqlite)
 		item, err := cachePage.Get(map[string]any{"id": id})
 		if err != nil {
 			logger.Error(ctx, fmt.Sprintf("Error getting task item: %v", err))
@@ -576,7 +576,7 @@ func (t taskService) timeOut() {
 			logger.Error(ctx, fmt.Sprintf("Panic in timeOut: %v", r))
 		}
 	}()
-	storage := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite)
+	storage := cache.NewPager[TaskRecord](ctx, cache.Sqlite)
 	items, err := storage.Find(0, 10, map[string]any{"status": Running}, cache.PageSorterAsc("createAt"))
 	if err != nil {
 		logger.Error(ctx, fmt.Sprintf("Error finding running task items: %v", err))
@@ -631,7 +631,7 @@ func (t taskService) CleanBackup() {
 			logger.Error(ctx, fmt.Sprintf("Error removing backup file: %v", err))
 		} else {
 			logger.Info(ctx, fmt.Sprintf("Removed backup file: %s", filePath))
-			items, err := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite).Find(0, 100, map[string]any{"buildFile": filePath})
+			items, err := cache.NewPager[TaskRecord](ctx, cache.Sqlite).Find(0, 100, map[string]any{"buildFile": filePath})
 			if err != nil {
 				logger.Error(ctx, fmt.Sprintf("Error getting task item: %v", err))
 			} else {
@@ -641,7 +641,7 @@ func (t taskService) CleanBackup() {
 				for _, item := range items.Items {
 					item.RBStatus = Cleaned
 					item.Running(fmt.Sprintf("Backup file %s removed", filePath), Warn)
-					if err := cache.NewPageStorage[TaskRecord](ctx, cache.Sqlite).Update(map[string]any{"id": item.ID}, item); err != nil {
+					if err := cache.NewPager[TaskRecord](ctx, cache.Sqlite).Update(map[string]any{"id": item.ID}, item); err != nil {
 						logger.Error(ctx, fmt.Sprintf("Error updating task item: %v", err))
 					}
 				}

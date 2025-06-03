@@ -29,14 +29,14 @@ func (re *ReStartLog) Save(ctx context.Context, startSrc StartSrc, log string) *
 	re.StartSrc = startSrc
 	re.StartTime = time.Now().Unix()
 	re.Log = log
-	if err := cache.NewPageStorage[ReStartLog](ctx, cache.Sqlite).Put(*re); err != nil {
+	if err := cache.NewPager[ReStartLog](ctx, cache.Sqlite).Put(*re); err != nil {
 		return errors.Verify("Failed to save restart log", err)
 	}
 	return nil
 }
 
 func ReStartPage(ctx context.Context, page, size int64) (*cache.PageCache[ReStartLog], *errors.Error) {
-	items, err := cache.NewPageStorage[ReStartLog](ctx, cache.Sqlite).Find(page, size, nil, cache.PageSorterDesc("startTime"))
+	items, err := cache.NewPager[ReStartLog](ctx, cache.Sqlite).Find(page, size, nil, cache.PageSorterDesc("startTime"))
 	if err != nil {
 		return nil, errors.Verify("Failed to get last start log", err)
 	}

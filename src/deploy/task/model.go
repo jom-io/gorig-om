@@ -44,8 +44,8 @@ const (
 )
 
 type TaskRecord struct {
-	Ctx     context.Context               `json:"-"`
-	Storage cache.PageStorage[TaskRecord] `json:"-"`
+	Ctx     context.Context         `json:"-"`
+	Storage cache.Pager[TaskRecord] `json:"-"`
 
 	ID string `json:"id"`
 	TaskOptions
@@ -126,7 +126,7 @@ func (t *TaskRecord) TimeOut(log string) {
 	t.Running(fmt.Sprintf(log), Error)
 	t.Status = Timeout
 	t.FinishAt = time.Now()
-	storage := cache.NewPageStorage[TaskRecord](t.Ctx, cache.Sqlite)
+	storage := cache.NewPager[TaskRecord](t.Ctx, cache.Sqlite)
 	if err := storage.Update(map[string]any{"id": t.ID}, t); err != nil {
 		logger.Error(t.Ctx, fmt.Sprintf("Error updating task item: %v", err))
 	}
