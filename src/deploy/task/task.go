@@ -513,7 +513,7 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 	//go build -o ${apiBinName}  -ldflags "-w -s"  -trimpath  ./simple/main.go
 	buildOpts := &deploy.RunOpts{
 		PrintLog: true,
-		TimeOut:  2 * time.Minute,
+		TimeOut:  5 * time.Minute,
 		Dir:      codeDir,
 		Env:      cpuEnv,
 	}

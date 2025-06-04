@@ -79,14 +79,14 @@ func (opts *RunOpts) DirExists() bool {
 
 func (opts *RunOpts) EnvExists() bool {
 	if opts.Env == nil {
-		return true
+		return false
 	}
 	for _, env := range opts.Env {
 		if env == "" {
 			return false
 		}
 	}
-	return true
+	return len(opts.Env) > 0
 }
 
 func (opts *RunOpts) PrintLogEnabled() bool {
@@ -137,6 +137,7 @@ func runCommand(ctx context.Context, cmd string, opts *RunOpts, args ...string) 
 
 	args = append([]string{"-n", fmt.Sprintf("%d", opts.Nice), cmd}, args...)
 	command := exec.CommandContext(ctx, "nice", args...)
+
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &out
@@ -146,6 +147,7 @@ func runCommand(ctx context.Context, cmd string, opts *RunOpts, args ...string) 
 	}
 	if opts.EnvExists() {
 		command.Env = append(os.Environ(), opts.Env...)
+		logger.Info(ctx, fmt.Sprintf("Command environment: %v", opts.Env))
 	}
 
 	err := command.Run()
