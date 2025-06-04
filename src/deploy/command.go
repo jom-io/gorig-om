@@ -26,6 +26,7 @@ type RunOpts struct {
 	Env      []string
 	PrintLog bool
 	TimeOut  time.Duration
+	Nice     int // default nice value is 5, range is -20 to 19
 }
 
 func DefOpts() *RunOpts {
@@ -54,6 +55,15 @@ func (opts *RunOpts) SetPrintLog(printLog bool) *RunOpts {
 
 func (opts *RunOpts) SetTimeOut(timeOut time.Duration) *RunOpts {
 	opts.TimeOut = timeOut
+	return opts
+}
+
+func (opts *RunOpts) SetNice(nice int) *RunOpts {
+	if nice < -20 || nice > 19 {
+		opts.Nice = 5
+	} else {
+		opts.Nice = nice
+	}
 	return opts
 }
 
@@ -118,7 +128,15 @@ func runCommand(ctx context.Context, cmd string, opts *RunOpts, args ...string) 
 		logger.Info(ctx, fmt.Sprintf("Running command: %s %s", cmd, strings.Join(args, " ")))
 	}
 
-	command := exec.CommandContext(ctx, cmd, args...)
+	if opts.Nice < -20 || opts.Nice > 19 {
+		return "", localErrs.Sys("Nice value must be between -20 and 19")
+	}
+	if opts.Nice == 0 {
+		opts.Nice = 5
+	}
+
+	args = append([]string{"-n", fmt.Sprintf("%d", opts.Nice), cmd}, args...)
+	command := exec.CommandContext(ctx, "nice", args...)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &out
@@ -147,11 +165,6 @@ func runCommand(ctx context.Context, cmd string, opts *RunOpts, args ...string) 
 
 	result := out.String()
 	output := strings.Split(result, "\n")
-	//for _, line := range output {
-	//	if strings.TrimSpace(line) != "" {
-	//		logger.Info(ctx, line)
-	//	}
-	//}
 
 	if len(output) > 0 {
 		result = strings.TrimSuffix(result, "\n")

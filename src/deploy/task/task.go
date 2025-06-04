@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -469,7 +470,15 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 
 	item.Running(fmt.Sprintf("Running go mod tidy..."))
 
-	if _, err := deploy.RunCommand(ctx, "go", deploy.DefOpts().SetDir(codeDir).SetTimeOut(5*time.Minute), "mod", "tidy"); err != nil {
+	cpuNum := runtime.NumCPU()
+	if cpuNum > 1 {
+		cpuNum = cpuNum - 1 // Leave one CPU free for other tasks
+	}
+	cpuEnv := []string{
+		fmt.Sprintf("GOMAXPROCS=%d", cpuNum),
+	}
+	modOpts := deploy.DefOpts().SetDir(codeDir).SetTimeOut(5 * time.Minute).SetEnv(cpuEnv)
+	if _, err := deploy.RunCommand(ctx, "go", modOpts, "mod", "tidy"); err != nil {
 		item.Running(fmt.Sprintf("Error running go mod tidy: %v", err), Error)
 		return
 	} else {
@@ -506,6 +515,7 @@ func (t taskService) buildFile(ctx context.Context, codeDir string, item *TaskRe
 		PrintLog: true,
 		TimeOut:  2 * time.Minute,
 		Dir:      codeDir,
+		Env:      cpuEnv,
 	}
 	if _, err := deploy.RunCommand(ctx, "go", buildOpts, "build", "-o", outputName, "-ldflags", "-w -s", "-trimpath", mainGoFile); err != nil {
 		item.Running(fmt.Sprintf("Error building file: %v", err), Error)

@@ -181,7 +181,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	}
 
 	runBack("Restarting service...")
-	if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./restart.sh %s > restart.log 2>&1 &", src.String())); rErr != nil {
+	if _, rErr := deploy.RunCommand(ctx, "bash", deploy.DefOpts().SetNice(5), "-c", fmt.Sprintf("nohup ./restart.sh %s > restart.log 2>&1 &", src.String())); rErr != nil {
 		runBack(fmt.Sprintf("Failed to execute restart.sh in background: %v", rErr))
 	}
 
@@ -321,12 +321,6 @@ func (a appService) Stop(ctx context.Context) *errors.Error {
 	logger.Info(ctx, "Stopping application...")
 
 	stopFile := "stop.sh"
-	//if _, err := os.Stat(stopFile); os.IsNotExist(err) {
-	//file, errC := os.Create(stopFile)
-	//if errC != nil {
-	//	return "", errors.Verify("Failed to create stop.sh file", errC)
-	//}
-	//defer file.Close()
 
 	runFile, _ := getRunFileName()
 
