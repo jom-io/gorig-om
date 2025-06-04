@@ -1,6 +1,7 @@
 package host
 
 type ResUsage struct {
+	CpuNum    int    `json:"cpuNum"`    // Number of CPU cores
 	AppCpu    string `json:"appCpu"`    // Application CPU usage in percentage
 	AppMem    string `json:"appMem"`    // Application Memory usage in percentage
 	AppDisk   string `json:"appDisk"`   // Application Disk usage in percentage

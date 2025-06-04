@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -148,6 +149,7 @@ func (s *Serv) Collect(ctx context.Context) {
 	dirUsed += s.getDiskUsage(currentDir)
 
 	resUsage := ResUsage{
+		CpuNum:    runtime.NumCPU(),                                        // Number of CPU cores
 		AppCpu:    fmt.Sprintf("%.2f", appCPUPercent),                      // Application CPU usage in percentage
 		AppMem:    fmt.Sprintf("%.2f", float64(rss.RSS)/1024/1024),         // Application Memory usage in MB
 		AppDisk:   fmt.Sprintf("%.2f", float64(dirUsed)/1024/1024),         // Application Disk usage in MB
