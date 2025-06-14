@@ -52,6 +52,7 @@ func init() {
 
 	// every minute collect host resource usage
 	cronx.AddCronTask("0 * * * * *", Host().Collect, 10*time.Second)
+
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()

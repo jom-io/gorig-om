@@ -201,6 +201,7 @@ func (a appService) RestartSuccess(ctx context.Context, startID, itemID, pid str
 		reStartLog := &ReStartLog{}
 		reStartLogFile := "restart.log"
 		log := ""
+		time.Sleep(1 * time.Second) // Ensure the restart log file is created before reading
 		if _, errOs := os.Stat(reStartLogFile); os.IsNotExist(errOs) {
 			logger.Error(ctx, "Restart log file not found")
 			log = fmt.Sprintf("Restarted at %s with ID %s", time.Now().Format("2006-01-02 15:04:05"), startID)
@@ -229,7 +230,7 @@ func (a appService) RestartSuccess(ctx context.Context, startID, itemID, pid str
 					}
 				}
 				logger.Info(ctx, fmt.Sprintf("Latest restart log file: %s", latestLog.Name()))
-				crashLog, errLog := readLastNLines("restart_logs/"+latestLog.Name(), 1000)
+				crashLog, errLog := readLastNLines("restart_logs/"+latestLog.Name(), 300)
 				if errLog != nil {
 					logger.Error(ctx, "Failed to read last lines of latest restart log file")
 					return
