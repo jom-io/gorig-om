@@ -1,4 +1,4 @@
-package om
+package test
 
 import (
 	delpoy "github.com/jom-io/gorig-om/src/deploy/task"

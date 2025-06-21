@@ -236,6 +236,18 @@ func preFilter(line string, opts SearchOptions) bool {
 	if opts.Level != "" && !strings.Contains(line, `"level":"`+opts.Level+`"`) {
 		return false
 	}
+	if len(opts.Levels) > 0 {
+		levelMatched := false
+		for _, level := range opts.Levels {
+			if strings.Contains(line, `"level":"`+level+`"`) {
+				levelMatched = true
+				break
+			}
+		}
+		if !levelMatched {
+			return false
+		}
+	}
 	if opts.TraceID != "" && !strings.Contains(line, `"_trace_id_":"`+opts.TraceID+`"`) {
 		return false
 	}
@@ -302,6 +314,19 @@ func matchRecord(r LogRecord, opts SearchOptions) bool {
 	// 1. level
 	if opts.Level != "" && !strings.EqualFold(r.Level, opts.Level) {
 		return false
+	}
+
+	if len(opts.Levels) > 0 {
+		levelMatched := false
+		for _, level := range opts.Levels {
+			if strings.EqualFold(r.Level, level) {
+				levelMatched = true
+				break
+			}
+		}
+		if !levelMatched {
+			return false
+		}
 	}
 
 	// 2. trace ID

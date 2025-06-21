@@ -1,4 +1,4 @@
-package om
+package test
 
 import (
 	deploy "github.com/jom-io/gorig-om/src/deploy/app"

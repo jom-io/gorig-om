@@ -2,11 +2,14 @@ package logtool
 
 var Categories = []string{"commons", "rest", "console"}
 
-var Levels = []string{"debug", "info", "warn", "error", "fatal", "dpanic"}
+var Levels = []Level{DebugLevel, InfoLevel, WarnLevel, ErrorLevel, FatalLevel, DpanicLevel}
+
+type Level string
 
 type SearchOptions struct {
 	Categories []string `json:"categories" form:"categories"`
 	Level      string   `json:"level" form:"level"`
+	Levels     []string `json:"levels" form:"levels"`
 	TraceID    string   `json:"traceID" form:"traceID"`
 	Keyword    string   `json:"keyword" form:"keyword"`
 	StartTime  string   `json:"startTime" form:"startTime"`
@@ -26,4 +29,17 @@ type MatchedRecord struct {
 
 func (m MatchedRecord) ToJsonStr() string {
 	return m.Record.ToJsonStr()
+}
+
+const (
+	DebugLevel  Level = "debug"
+	InfoLevel   Level = "info"
+	WarnLevel   Level = "warn"
+	ErrorLevel  Level = "error"
+	FatalLevel  Level = "fatal"
+	DpanicLevel Level = "dpanic"
+)
+
+func (l Level) Str() string {
+	return string(l)
 }

@@ -46,7 +46,7 @@ func init() {
 		if getMaxPeriod, err := time.ParseDuration(getString); err == nil {
 			maxPeriod = getMaxPeriod
 		} else {
-			logger.Error(context.Background(), "Failed to parse MaxPeriod", zap.String("value", getString), zap.Error(err))
+			logger.Error(context.Background(), "Failed to parse host MaxPeriod", zap.String("value", getString), zap.Error(err))
 		}
 	}
 
@@ -228,7 +228,7 @@ func (s *Serv) TimeRange(ctx context.Context, start, end int64, granularity cach
 	for _, f := range field {
 		fieldStr = append(fieldStr, string(f))
 	}
-	result, err := s.storage.GroupByTime(nil, from, to, granularity, fieldStr...)
+	result, err := s.storage.GroupByTime(nil, from, to, granularity, cache.AggAvg, fieldStr...)
 	if err != nil {
 		logger.Error(ctx, "GroupByTime failed", zap.Error(err))
 		return nil, errors.Sys("GroupByTime failed", err)

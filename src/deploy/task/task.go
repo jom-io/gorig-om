@@ -558,7 +558,7 @@ func (t taskService) StartedListen() {
 			logger.Error(ctx, fmt.Sprintf("Error getting task item: %v", err))
 			return nil
 		}
-		logger.Info(ctx, fmt.Sprintf("Task start item: %v", item))
+		//logger.Info(ctx, fmt.Sprintf("Task start item: %v", item))
 		if item == nil {
 			logger.Error(ctx, "Task item not found")
 			return nil
