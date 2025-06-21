@@ -109,7 +109,7 @@ func (s *Serv) TimeRange(ctx context.Context, start, end int64, granularity cach
 	for _, f := range field {
 		fieldStr = append(fieldStr, string(f))
 	}
-	result, err := s.storage.GroupByTime(nil, from, to, granularity, fieldStr...)
+	result, err := s.storage.GroupByTime(nil, from, to, granularity, cache.AggTotal, fieldStr...)
 	if err != nil {
 		logger.Error(ctx, "GroupByTime failed", zap.Error(err))
 		return nil, errors.Sys("GroupByTime failed", err)
