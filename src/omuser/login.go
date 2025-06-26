@@ -63,7 +63,7 @@ func LoginByPwd(ctx *gin.Context, hashPwd string) (sign *string, err *errors.Err
 	}
 
 	_ = cache.New[loginCountOut](cache.JSON, "loginErrCount").Del(IP)
-	tokens, e := tokenx.Get(tokenx.Jwt, tokenx.Memory).Manager.GenerateAndRecord(IP, nil, time.Now().Unix()+3600)
+	tokens, e := tokenx.Get(tokenx.Jwt, tokenx.Memory).Manager.GenerateAndRecord(ctx, IP, nil, time.Now().Unix()+3600)
 	if e != nil {
 		return nil, e
 	}
