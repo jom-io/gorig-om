@@ -302,6 +302,7 @@ sudo tar -C /usr/local -xzf go%s.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh > /dev/null
 sudo chmod +x /etc/profile.d/go.sh
 source /etc/profile.d/go.sh
+export PATH=$PATH:/usr/local/go/bin
 sudo rm -rf go%s.linux-amd64.*
 go version
 `, GOVersion, GOVersion, GOVersion)

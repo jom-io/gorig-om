@@ -88,8 +88,7 @@ github.com/jinzhu/inflection v1.0.0/go.mod h1:h+uFLlag+Qp1Va5pdKtLDYj+kHp5pxUVkr
 github.com/jinzhu/now v1.1.4/go.mod h1:d3SSVoowX0Lcu0IBviAWJpolVfI5UJVZZ7cO71lE/z8=
 github.com/jinzhu/now v1.1.5 h1:/o9tlHleP7gOFmsnYNz3RGnqzefHA47wQpKrrdTIwXQ=
 github.com/jinzhu/now v1.1.5/go.mod h1:d3SSVoowX0Lcu0IBviAWJpolVfI5UJVZZ7cO71lE/z8=
-github.com/jom-io/gorig v0.0.44 h1:aeVaxszqKAa7e6UGNMPTemD9G5C0byC9ZuTlrC16R/Q=
-github.com/jom-io/gorig v0.0.44/go.mod h1:DRWQ8CeLZObZkTAdlSLY7+AMZPGokeQcwexEcpOC6jg=
+github.com/jom-io/gorig v0.0.47 h1:xGIJwqjyqmWzj5STHdDUCGmX+bYMQIYidvxp/4py9xo=
 github.com/jom-io/gorig v0.0.47/go.mod h1:DRWQ8CeLZObZkTAdlSLY7+AMZPGokeQcwexEcpOC6jg=
 github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
