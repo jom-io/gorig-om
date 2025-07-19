@@ -21,26 +21,69 @@ import (
 )
 
 const maxLineSize = 1024 * 1024 // 1MB max per JSON line
+const defLogDir = ".logs"
+
+func getLogDir(rootDir string) string {
+	if rootDir == "" {
+		rootDir = "."
+	}
+	return filepath.Join(rootDir, defLogDir)
+}
+
+func FetchCategories(rootDir string) ([]string, *errors.Error) {
+	logDir := getLogDir(rootDir)
+	if _, err := os.Stat(logDir); os.IsNotExist(err) {
+		return nil, errors.Verify(fmt.Sprintf("log directory does not exist: %s", logDir))
+	}
+
+	catDirList, err := os.ReadDir(logDir)
+	if err != nil {
+		return nil, errors.Verify(fmt.Sprintf("read log directory error: %v", err))
+	}
+
+	categories := make([]string, 0)
+	for _, catDir := range catDirList {
+		if catDir.IsDir() {
+			isValidCategory := false
+			_ = filepath.Walk(filepath.Join(logDir, catDir.Name()), func(path string, info fs.FileInfo, err error) error {
+				if err != nil {
+					logger.Warn(nil, "skip file", zap.Error(err))
+					return nil
+				}
+				if !info.IsDir() && strings.HasSuffix(info.Name(), ".jsonl") {
+					isValidCategory = true
+					return io.EOF // Stop walking once we find a valid file
+				}
+				return nil
+			})
+			if isValidCategory {
+				categories = append(categories, catDir.Name())
+			}
+		}
+	}
+
+	return categories, nil
+}
 
 func ListLogFiles(opts SearchOptions) (map[string]string, error) {
 	if opts.RootDir == "" {
 		opts.RootDir = "."
 	}
-	logDir := filepath.Join(opts.RootDir, ".logs")
+	logDir := getLogDir(opts.RootDir)
 	result := make(map[string]string)
 
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("log dir not found: %s", logDir)
+	localCategories, e := FetchCategories(opts.RootDir)
+	if e != nil {
+		return nil, fmt.Errorf("fetch categories error: %v", e)
+	}
+	categories := opts.Categories
+	if len(categories) == 0 {
+		categories = localCategories
 	}
 
 	catDirList, err := os.ReadDir(logDir)
 	if err != nil {
 		return nil, fmt.Errorf("read log dir error: %v", err)
-	}
-
-	categories := opts.Categories
-	if len(categories) == 0 {
-		categories = Categories
 	}
 
 	newCategories := make([]string, 0)

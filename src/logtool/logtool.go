@@ -8,7 +8,8 @@ import (
 
 func GetCategories(ctx *gin.Context) {
 	defer apix.HandlePanic(ctx)
-	apix.HandleData(ctx, consts.CurdSelectFailCode, &Categories, nil)
+	categories, err := FetchCategories("")
+	apix.HandleData(ctx, consts.CurdSelectFailCode, categories, err)
 }
 
 func GetLevels(ctx *gin.Context) {

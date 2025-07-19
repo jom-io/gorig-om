@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"syscall"
@@ -191,7 +192,8 @@ func autoCheck() {
 	ctx := logger.NewCtx()
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error(ctx, fmt.Sprintf("Panic in autoCheck: %v", r))
+			stack := debug.Stack()
+			logger.Error(ctx, fmt.Sprintf("Panic in autoCheck: %v\nStack: %s", r, stack))
 		}
 	}()
 	//logger.Info(ctx, "Auto running task")

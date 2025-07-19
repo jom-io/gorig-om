@@ -1,7 +1,5 @@
 package logtool
 
-var Categories = []string{"commons", "rest", "console", "elapse", "errors", "fix", "hmeili", "mq_c", "mq_p", "tick"}
-
 var Levels = []Level{DebugLevel, InfoLevel, WarnLevel, ErrorLevel, FatalLevel, DpanicLevel}
 
 type Level string
