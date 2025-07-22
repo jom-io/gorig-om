@@ -327,10 +327,10 @@ func (a appService) Stop(ctx context.Context) *errors.Error {
 
 	content := fmt.Sprintf(`#!/bin/bash
 echo "Stopping watchdog service..."
-pkill -9 -f watchdog_%s.sh
+pkill -9 -f %s
 echo "Stopping service..."
 pkill -15 -f %s
-echo "Service stopped successfully."`, sys.RunMode, runFile)
+echo "Service stopped successfully."`, watchdogFile, runFile)
 
 	if errW := os.WriteFile(stopFile, []byte(content), 0755); errW != nil {
 		return errors.Verify("Failed to write to stop.sh file", errW)
