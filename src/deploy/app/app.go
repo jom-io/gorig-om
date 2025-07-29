@@ -110,7 +110,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	fi
     echo "Restart source: $src"
 	echo "Stopping service..."
-	pkill -15 -f %s
+	pkill -9 -f %s
 	timeout=0
 	while pgrep -f %s.linux64 > /dev/null; do
 	   echo "Waiting for the service to stop..."
@@ -329,7 +329,7 @@ func (a appService) Stop(ctx context.Context) *errors.Error {
 echo "Stopping watchdog service..."
 pkill -9 -f %s
 echo "Stopping service..."
-pkill -15 -f %s
+pkill -9 -f %s
 echo "Service stopped successfully."`, watchdogFile, runFile)
 
 	if errW := os.WriteFile(stopFile, []byte(content), 0755); errW != nil {
