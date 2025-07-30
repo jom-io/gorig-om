@@ -110,9 +110,9 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	fi
     echo "Restart source: $src"
 	echo "Stopping service..."
-	pkill -9 -f %s
+	pkill -15 -f %s
 	timeout=0
-	while pgrep -f %s.linux64 > /dev/null; do
+	while pgrep -f %s > /dev/null; do
 	   echo "Waiting for the service to stop..."
 	   timeout=$(($timeout+1))
 	   if [ $timeout -gt 10 ]; then
