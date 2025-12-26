@@ -111,7 +111,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
     echo "Restart source: $src"
 	echo "Stopping service..."
 	pkill -15 -f %s
-	timeout=0Set git config
+	timeout=0
 	while pgrep -f %s > /dev/null; do
 	   echo "Waiting for the service to stop..."
 	   timeout=$(($timeout+1))
