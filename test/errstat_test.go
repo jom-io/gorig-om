@@ -18,15 +18,29 @@ func TestErrStatWorkflow(t *testing.T) {
 		logger.Warn(ctx, "Starting error stats collection")
 		logger.Error(ctx, "Simulating error for testing")
 		logger.DPanic(ctx, "Simulating panic for testing")
-
+		time.Sleep(2 * time.Second) // Wait for logs to be processed
 		s.Collect(ctx)
 		t.Log("Collect executed")
 	})
 
-	t.Run("ValidTimeRangeQuery", func(t *testing.T) {
+	t.Run("ValidTimeMinRangeQuery", func(t *testing.T) {
 		end := time.Now().Unix()
 		start := end - 60
 		result, err := s.TimeRange(ctx, start, end, cache.GranularityMinute, errstat.ErrTypeWarn, errstat.ErrTypeError, errstat.ErrTypePanic, errstat.ErrTypeTotal)
+		if err != nil {
+			t.Errorf("TimeRange failed: %v", err)
+			return
+		}
+		t.Logf("TimeRange returned %d items", len(result))
+		for _, item := range result {
+			t.Logf("TimeRange item: %v", item)
+		}
+	})
+
+	t.Run("ValidTimeDayRangeQuery", func(t *testing.T) {
+		end := time.Now().Unix()
+		start := end - 86400
+		result, err := s.TimeRange(ctx, start, end, cache.GranularityDay, errstat.ErrTypeWarn, errstat.ErrTypeError, errstat.ErrTypePanic, errstat.ErrTypeTotal)
 		if err != nil {
 			t.Errorf("TimeRange failed: %v", err)
 			return

@@ -13,6 +13,7 @@ const (
 	StartSrcManual StartSrc = "manual"
 	StartSrcDeploy StartSrc = "deploy"
 	StartSrcCrash  StartSrc = "crash"
+	StartSrcOveruse StartSrc = "overuse"
 )
 
 func (s StartSrc) String() string {

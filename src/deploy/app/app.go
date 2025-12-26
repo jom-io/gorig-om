@@ -111,7 +111,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
     echo "Restart source: $src"
 	echo "Stopping service..."
 	pkill -15 -f %s
-	timeout=0
+	timeout=0Set git config
 	while pgrep -f %s > /dev/null; do
 	   echo "Waiting for the service to stop..."
 	   timeout=$(($timeout+1))
@@ -127,6 +127,7 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 	export GORIG_SYS_MODE=%s
 	nohup ./%s > nohup.out 2>&1 &
 	pid=$!
+	echo $pid > app.pid
 	echo "Service started with PID: $pid"
 	echo "Checking service startup status..."
 	sleep 2
@@ -154,16 +155,73 @@ func (a appService) Restart(ctx context.Context, runFile string, runBack RunBack
 
 	content = fmt.Sprintf(`#!/bin/bash
 	echo "Watchdog service started at: $(date)"
+	pid_file="app.pid"
+	check_interval=5
+	overuse_limit=3
+	overuse_cooldown=30
+	overuse_count=0
+	last_overuse_restart=0
+
+	get_pid() {
+	   if [ -f "$pid_file" ]; then
+	       pid=$(cat "$pid_file")
+	       if [ -n "$pid" ] && ps -p "$pid" > /dev/null 2>&1; then
+	           echo "$pid"
+	           return
+	       fi
+	   fi
+	   pgrep -f %s | head -n 1
+	}
+
 	while true; do
 	   echo "Checking at: $(date)"
-	   if ! pgrep -f %s > /dev/null; then
+	   pid=$(get_pid)
+	   if [ -z "$pid" ]; then
 	       echo "Service is not running. Restarting..."
 	       mkdir -p restart_logs
 	       cp nohup.out restart_logs/auto_restart_$(date +%%Y%%m%%d%%H%%M%%S).log
 	       ./restart.sh %s
+	       overuse_count=0
+	       last_overuse_restart=$(date +%%s)
+	       sleep $overuse_cooldown
+	       continue
 	   fi
-	   sleep 5
-	done`, runFile, StartSrcCrash.String())
+
+	   proc_stats=$(ps -p "$pid" -o %%cpu,%%mem --no-headers | awk '{print $1" "$2}')
+	   proc_cpu=$(echo "$proc_stats" | awk '{print $1}')
+	   proc_mem=$(echo "$proc_stats" | awk '{print $2}')
+	   sys_cpu=$(top -b -n1 | awk -F',' '/Cpu\\(s\\)/ {gsub("%%","",$4); gsub("id","",$4); print 100-$4}')
+	   sys_mem=$(free | awk '/Mem:/ {printf("%%.2f", ($3/$2)*100)}')
+
+	   if [ -z "$proc_cpu" ] || [ -z "$proc_mem" ] || [ -z "$sys_cpu" ] || [ -z "$sys_mem" ]; then
+	       echo "Resource stats unavailable; skipping check."
+	   else
+	       cond_cpu=$(awk -v p="$proc_cpu" -v s="$sys_cpu" 'BEGIN {print (p>50 && s>90) ? 1 : 0}')
+	       cond_mem=$(awk -v p="$proc_mem" -v s="$sys_mem" 'BEGIN {print (p>50 && s>90) ? 1 : 0}')
+	       if [ "$cond_cpu" -eq 1 ] || [ "$cond_mem" -eq 1 ]; then
+	           overuse_count=$(($overuse_count+1))
+	           echo "Overuse detected ($overuse_count): pid=$pid proc_cpu=$proc_cpu proc_mem=$proc_mem sys_cpu=$sys_cpu sys_mem=$sys_mem"
+	       else
+	           overuse_count=0
+	       fi
+
+	       now=$(date +%%s)
+	       if [ $overuse_count -ge $overuse_limit ] && [ $(($now-$last_overuse_restart)) -ge $overuse_cooldown ]; then
+	           mkdir -p restart_logs
+	           log_file=restart_logs/auto_restart_$(date +%%Y%%m%%d%%H%%M%%S).log
+	           {
+	               echo "Overuse restart at $(date)"
+	               echo "pid=$pid proc_cpu=$proc_cpu proc_mem=$proc_mem sys_cpu=$sys_cpu sys_mem=$sys_mem consecutive=$overuse_count"
+	           } >> $log_file
+	           ./restart.sh %s
+	           last_overuse_restart=$now
+	           overuse_count=0
+	           sleep $overuse_cooldown
+	           continue
+	       fi
+	   fi
+	   sleep $check_interval
+	done`, runFile, StartSrcCrash.String(), StartSrcOveruse.String())
 
 	if errW := os.WriteFile(watchdogFile, []byte(content), 0755); errW != nil {
 		return errors.Verify("Failed to write to watchdog file", errW)
@@ -330,6 +388,9 @@ echo "Stopping watchdog service..."
 pkill -9 -f %s
 echo "Stopping service..."
 pkill -9 -f %s
+if [ -f app.pid ]; then
+  rm app.pid
+fi
 echo "Service stopped successfully."`, watchdogFile, runFile)
 
 	if errW := os.WriteFile(stopFile, []byte(content), 0755); errW != nil {
@@ -349,7 +410,7 @@ echo "Service stopped successfully."`, watchdogFile, runFile)
 func (a appService) Clean(ctx context.Context) *errors.Error {
 	logger.Info(ctx, "Cleaning files...")
 
-	files := []string{"restart.sh", "stop.sh", fmt.Sprintf("watchdog_%s.sh", sys.RunMode), "nohup.out", "restart_logs", "watchdog.out"}
+	files := []string{"restart.sh", "stop.sh", fmt.Sprintf("watchdog_%s.sh", sys.RunMode), "nohup.out", "restart_logs", "watchdog.out", "app.pid"}
 	for _, file := range files {
 		if _, err := os.Stat(file); os.IsNotExist(err) {
 			continue
