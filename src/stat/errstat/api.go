@@ -20,3 +20,17 @@ func TimeRange(ctx *gin.Context) {
 	resUsage, err := S().TimeRange(ctx, start, end, cache.Granularity(unit), filter...)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, resUsage, err)
 }
+
+func Top(ctx *gin.Context) {
+	defer apix.HandlePanic(ctx)
+	start, err := apix.GetParamInt64(ctx, "start", apix.Force)
+	end, err := apix.GetParamInt64(ctx, "end", apix.Force)
+	limit, err := apix.GetParamInt64(ctx, "limit", apix.Force)
+	filter, err := apix.GetParamArray[ErrType](ctx, "filter", apix.Force)
+	if err != nil {
+		return
+	}
+
+	data, e := S().TopSignatures(ctx, start, end, filter, limit)
+	apix.HandleData(ctx, consts.CurdSelectFailCode, data, e)
+}

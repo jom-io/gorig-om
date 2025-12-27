@@ -83,5 +83,6 @@ func Setup() {
 
 		e := om.Group("stat")
 		e.GET("error/time", errstat.TimeRange)
+		e.GET("error/top", errstat.Top)
 	})
 }
