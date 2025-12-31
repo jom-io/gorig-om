@@ -222,7 +222,7 @@ func (s *Serv) TopSignatures(ctx context.Context, start, end int64, filter []Err
 		{Field: "count", Agg: cache.AggSum, Alias: "cnt"},
 	}
 
-	grouped, err := s.sigStorage.GroupByFields(cond, groups, aggFields, cache.PageSorterDesc("cnt"))
+	grouped, err := s.sigStorage.GroupByFields(cond, groups, aggFields, 0, cache.PageSorterDesc("cnt"))
 	if err != nil {
 		logger.Error(ctx, "GroupByFields failed", zap.Error(err))
 		return nil, errors.Sys("GroupByFields failed", err)
