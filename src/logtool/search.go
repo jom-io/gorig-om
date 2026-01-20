@@ -192,7 +192,7 @@ func SearchLogs(opts SearchOptions) ([]MatchedRecord, *errors.Error) {
 	for _, v := range files {
 		fileList = append(fileList, v)
 	}
-	logger.Info(nil, "log files", zap.Any("files", fileList))
+	//logger.Info(nil, "log files", zap.Any("files", fileList))
 
 	var matchedRecords []MatchedRecord
 	var matchedCount int

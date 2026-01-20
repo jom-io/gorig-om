@@ -202,19 +202,11 @@ func (s *Serv) TopSignatures(ctx context.Context, start, end int64, filter []Err
 		},
 	}
 
-	if len(filter) > 0 {
-		var levels []string
-		for _, lv := range filter {
-			if strings.TrimSpace(lv.String()) == "" {
-				continue
-			}
-			levels = append(levels, lv.String())
-		}
-		if len(levels) == 1 {
-			cond["level"] = levels[0]
-		} else if len(levels) > 1 {
-			cond["level"] = map[string]any{"$in": levels}
-		}
+	levels := errTypesToLevels(filter)
+	if len(levels) == 1 {
+		cond["level"] = levels[0]
+	} else if len(levels) > 1 {
+		cond["level"] = map[string]any{"$in": levels}
 	}
 
 	groups := []string{"sigHash"}
@@ -255,6 +247,41 @@ func (s *Serv) TopSignatures(ctx context.Context, start, end int64, filter []Err
 	}
 
 	return result, nil
+}
+
+func errTypesToLevels(filter []ErrType) []string {
+	if len(filter) == 0 {
+		return nil
+	}
+
+	levelSet := make(map[string]struct{})
+	for _, lv := range filter {
+		switch lv {
+		case ErrTypePanic:
+			levelSet[logtool.FatalLevel.Str()] = struct{}{}
+			levelSet[logtool.DpanicLevel.Str()] = struct{}{}
+		case ErrTypeError:
+			levelSet[logtool.ErrorLevel.Str()] = struct{}{}
+		case ErrTypeWarn:
+			levelSet[logtool.WarnLevel.Str()] = struct{}{}
+		case ErrTypeTotal:
+			return nil
+		default:
+			if strings.TrimSpace(lv.String()) != "" {
+				levelSet[lv.String()] = struct{}{}
+			}
+		}
+	}
+
+	if len(levelSet) == 0 {
+		return nil
+	}
+
+	levels := make([]string, 0, len(levelSet))
+	for lv := range levelSet {
+		levels = append(levels, lv)
+	}
+	return levels
 }
 
 func (s *Serv) Clear(ctx context.Context) error {
