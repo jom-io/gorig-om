@@ -250,9 +250,35 @@ func (a appService) RestartSuccess(ctx context.Context, startID, itemID, pid str
 	logger.Info(ctx, "Restarting application...")
 	c := cache.New[string](cache.JSON)
 	localID, err := c.Get(startIDKey)
+	validStart := false
 	if err != nil {
-		logger.Error(ctx, "Failed to get local startID")
-		return
+		logger.Warn(ctx, "Failed to get local startID from cache; using fallback to start watchdog.")
+	} else if localID == "" {
+		logger.Warn(ctx, "Local startID missing; using fallback to start watchdog.")
+	} else if localID != startID {
+		logger.Error(ctx, fmt.Sprintf("Local startID %s does not match request startID %s; using fallback to start watchdog.", localID, startID))
+	} else {
+		validStart = true
+	}
+
+	startWatchdog := func() {
+		if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
+			logger.Error(ctx, "Failed to start watchdog service")
+			return
+		}
+
+		// Avoid duplicate watchdog processes when falling back
+		if running, _ := deploy.RunCommand(ctx, "pgrep", nil, "-f", watchdogFile); len(strings.TrimSpace(running)) > 0 {
+			logger.Info(ctx, "Watchdog service already running.")
+			return
+		}
+
+		if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
+			logger.Error(ctx, "Failed to start watchdog service")
+			return
+		} else {
+			logger.Info(ctx, "Watchdog service started.")
+		}
 	}
 
 	go func() {
@@ -304,11 +330,7 @@ func (a appService) RestartSuccess(ctx context.Context, startID, itemID, pid str
 		}
 	}()
 
-	if localID != "" {
-		if localID != startID {
-			logger.Error(ctx, fmt.Sprintf("Local startID %s does not match request startID %s", localID, startID))
-			return
-		}
+	if validStart {
 		go func() {
 			if err := cache.New[string](cache.JSON).Del(startIDKey); err != nil {
 				logger.Error(ctx, "Failed to delete local startID")
@@ -317,17 +339,7 @@ func (a appService) RestartSuccess(ctx context.Context, startID, itemID, pid str
 		}()
 
 		go func() {
-			if _, rErr := deploy.RunCommand(ctx, "echo", nil, "Starting watchdog service..."); rErr != nil {
-				logger.Error(ctx, "Failed to start watchdog service")
-				return
-			}
-
-			if _, rErr := deploy.RunCommand(ctx, "bash", nil, "-c", fmt.Sprintf("nohup ./%s > watchdog.out 2>&1 &", watchdogFile)); rErr != nil {
-				logger.Error(ctx, "Failed to start watchdog service")
-				return
-			} else {
-				logger.Info(ctx, "Watchdog service started.")
-			}
+			startWatchdog()
 
 			if itemID != "" {
 				go func() {
@@ -338,7 +350,11 @@ func (a appService) RestartSuccess(ctx context.Context, startID, itemID, pid str
 				}()
 			}
 		}()
+		return
 	}
+
+	// Fallback: start watchdog even when startID verification fails/missing (manual restart support)
+	go startWatchdog()
 
 	//	time.Sleep(3 * time.Second)
 	//	var runErr *errors.Error

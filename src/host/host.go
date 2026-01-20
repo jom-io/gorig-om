@@ -149,9 +149,15 @@ func (s *Serv) Collect(ctx context.Context) {
 	}
 	dirUsed += s.getDiskUsage(currentDir)
 
+	cpuNum := runtime.NumCPU()
+	appCpuAvg := appCPUPercent
+	if cpuNum > 0 {
+		appCpuAvg = appCPUPercent / float64(cpuNum)
+	}
+
 	resUsage := ResUsage{
-		CpuNum:    runtime.NumCPU(),                                        // Number of CPU cores
-		AppCpu:    fmt.Sprintf("%.2f", appCPUPercent),                      // Application CPU usage in percentage
+		CpuNum:    cpuNum,                                                  // Number of CPU cores
+		AppCpu:    fmt.Sprintf("%.2f", appCpuAvg),                          // Application CPU usage in percentage (host-average)
 		AppMem:    fmt.Sprintf("%.2f", float64(rss.RSS)/1024/1024),         // Application Memory usage in MB
 		AppDisk:   fmt.Sprintf("%.2f", float64(dirUsed)/1024/1024),         // Application Disk usage in MB
 		CPU:       fmt.Sprintf("%.2f", hostCpuAvg),                         // Host CPU usage in percentage
