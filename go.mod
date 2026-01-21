@@ -4,12 +4,10 @@ go 1.23.0
 
 toolchain go1.23.4
 
-replace github.com/jom-io/gorig => ../gorig
-
 require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gin-gonic/gin v1.9.1
-	github.com/jom-io/gorig v0.0.49
+	github.com/jom-io/gorig v0.0.50
 	github.com/rs/xid v1.5.0
 	github.com/shirou/gopsutil/v4 v4.25.4
 	github.com/spf13/cast v1.6.0
