@@ -9,6 +9,7 @@ import (
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
 	"go.uber.org/zap"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,11 @@ import (
 var (
 	statServ  *Serv
 	latMaxAge = 30 * 24 * time.Hour
+)
+
+const (
+	defaultSlowMs    int64 = 200
+	logSearchMaxSize       = 50000
 )
 
 type Serv struct {
@@ -52,7 +58,12 @@ func (s *Serv) Collect(ctx context.Context) {
 	opts := logtool.SearchOptions{
 		StartTime: time.Now().Add(-time.Minute).Format(time.DateTime),
 		EndTime:   time.Now().Format(time.DateTime),
-		Levels:    []string{logtool.InfoLevel.Str(), logtool.WarnLevel.Str(), logtool.ErrorLevel.Str()},
+		Categories: []string{
+			"rest",
+			"invoke",
+		},
+		Levels: []string{logtool.InfoLevel.Str(), logtool.WarnLevel.Str(), logtool.ErrorLevel.Str()},
+		Size:   logSearchMaxSize,
 	}
 	logs, e := logtool.SearchLogs(opts)
 	if e != nil {
@@ -64,10 +75,12 @@ func (s *Serv) Collect(ctx context.Context) {
 		at     time.Time
 		method string
 		uri    string
+		log    ApiLogSample
 	}
 	type outRecord struct {
 		at     time.Time
 		status int
+		log    ApiLogSample
 	}
 
 	inMap := make(map[string]inRecord)
@@ -88,11 +101,11 @@ func (s *Serv) Collect(ctx context.Context) {
 			tm := parseTime(rec.Time)
 			method := strings.ToUpper(strings.TrimSpace(rec.Data["method"]))
 			uri := rec.Data["uri"]
-			inMap[trace] = inRecord{at: tm, method: method, uri: uri}
+			inMap[trace] = inRecord{at: tm, method: method, uri: uri, log: buildLogSample(rec)}
 		case "OUT":
 			tm := parseTime(rec.Time)
 			status := parseStatus(rec.Data["status"])
-			outMap[trace] = outRecord{at: tm, status: status}
+			outMap[trace] = outRecord{at: tm, status: status, log: buildLogSample(rec)}
 		default:
 			continue
 		}
@@ -111,17 +124,21 @@ func (s *Serv) Collect(ctx context.Context) {
 		if latency < 0 {
 			continue
 		}
-		key := fmt.Sprintf("%s|%s", in.method, in.uri)
+		normalizedURI := normalizeURI(in.uri)
+		key := fmt.Sprintf("%s|%s", in.method, normalizedURI)
 		stat, ok := agg[key]
 		if !ok {
 			stat = &ApiLatencyStat{
 				At:     nowBucket,
 				Method: in.method,
-				URI:    in.uri,
+				URI:    normalizedURI,
 			}
 			agg[key] = stat
 		}
 		stat.Count++
+		if latency > defaultSlowMs {
+			stat.CountSlow++
+		}
 		stat.SumLatency += latency
 		if latency > stat.MaxLatency {
 			stat.MaxLatency = latency
@@ -155,16 +172,36 @@ func (s *Serv) Collect(ctx context.Context) {
 			}
 		}
 
-		if _, ok := metaSamples[key]; !ok {
-			metaSamples[key] = &ApiLatencyMeta{
-				Method:       in.method,
-				URI:          in.uri,
-				SampleTrace:  trace,
-				SampleStatus: status,
-				FirstAt:      nowBucket,
-				LastAt:       nowBucket,
+		sample := &ApiLatencySample{
+			TraceID:   trace,
+			URL:       in.uri,
+			RequestAt: in.at.UnixMilli(),
+			Status:    status,
+			LatencyMs: latency,
+			InLog:     in.log,
+			OutLog:    out.log,
+		}
+
+		meta, ok := metaSamples[key]
+		if !ok {
+			meta = &ApiLatencyMeta{
+				Method:  in.method,
+				URI:     normalizedURI,
+				FirstAt: nowBucket,
+				LastAt:  nowBucket,
 			}
 		}
+		updateSampleLatest(meta, sample)
+		updateSampleSlow(meta, sample)
+		switch {
+		case status >= 200 && status < 300:
+			updateSampleByTime(&meta.Sample2xx, sample)
+		case status >= 400 && status < 500:
+			updateSampleByTime(&meta.Sample4xx, sample)
+		case status >= 500 && status < 600:
+			updateSampleByTime(&meta.Sample5xx, sample)
+		}
+		metaSamples[key] = meta
 	}
 
 	for key, stat := range agg {
@@ -190,10 +227,14 @@ func (s *Serv) Collect(ctx context.Context) {
 		} else {
 			updated := *old
 			updated.LastAt = nowBucket
-			if updated.SampleTrace == "" && meta.SampleTrace != "" {
-				updated.SampleTrace = meta.SampleTrace
-				updated.SampleStatus = meta.SampleStatus
+			if updated.FirstAt == 0 {
+				updated.FirstAt = meta.FirstAt
 			}
+			mergeSampleLatest(&updated, meta.SampleLatest)
+			mergeSampleSlow(&updated, meta.SampleSlow)
+			mergeSampleByTime(&updated.Sample2xx, meta.Sample2xx)
+			mergeSampleByTime(&updated.Sample4xx, meta.Sample4xx)
+			mergeSampleByTime(&updated.Sample5xx, meta.Sample5xx)
 			_ = s.meta.Update(cond, &updated)
 		}
 	}
@@ -210,12 +251,100 @@ func (s *Serv) Clear(ctx context.Context) error {
 	return nil
 }
 
-func (s *Serv) Top(ctx context.Context, start, end int64, methods []string, uriPrefix string, statuses []string, sortBy string, asc bool, limit int64) ([]*ApiLatencyRank, *errors.Error) {
+func (s *Serv) TimeRange(ctx context.Context, start, end int64, granularity cache.Granularity, field ...ApiStatType) ([]*cache.PageTimeItem, *errors.Error) {
+	from := time.Unix(start, 0)
+	to := time.Unix(end, 0)
+	if from.IsZero() || to.IsZero() || from.After(to) {
+		return nil, errors.Verify("Invalid time range")
+	}
+	if granularity == "" {
+		granularity = cache.GranularityHour
+	}
+	fields := make([]string, 0, len(field))
+	for _, f := range field {
+		fields = append(fields, f.String())
+	}
+	if len(fields) == 0 {
+		fields = []string{ApiStatCount2xx.String(), ApiStatCount4xx.String(), ApiStatCount5xx.String()}
+	}
+
+	result, err := s.storage.GroupByTime(nil, from, to, granularity, cache.AggSum, fields...)
+	if err != nil {
+		logger.Error(ctx, "GroupByTime failed", zap.Error(err))
+		return nil, errors.Sys("GroupByTime failed", err)
+	}
+	return result, nil
+}
+
+func (s *Serv) Summary(ctx context.Context, start, end int64, slowMs int64) (*ApiLatencySummary, *errors.Error) {
+	from := time.Unix(start, 0)
+	to := time.Unix(end, 0)
+	if from.IsZero() || to.IsZero() || from.After(to) {
+		return nil, errors.Verify("Invalid time range")
+	}
+	if slowMs <= 0 {
+		slowMs = defaultSlowMs
+	}
+
+	items, err := s.storage.GroupByTime(nil, from, to, cache.GranularityMinute, cache.AggSum,
+		ApiStatCount.String(),
+		ApiStatSumLatency.String(),
+		ApiStatCount5xx.String(),
+		ApiStatCountSlow.String(),
+	)
+	if err != nil {
+		logger.Error(ctx, "GroupByTime summary failed", zap.Error(err))
+		return nil, errors.Sys("GroupByTime summary failed", err)
+	}
+
+	var totalCount int64
+	var totalSum int64
+	var total5xx int64
+	var totalSlow int64
+	for _, item := range items {
+		totalCount += int64(item.Value[ApiStatCount.String()])
+		totalSum += int64(item.Value[ApiStatSumLatency.String()])
+		total5xx += int64(item.Value[ApiStatCount5xx.String()])
+		totalSlow += int64(item.Value[ApiStatCountSlow.String()])
+	}
+
+	var avg int64
+	if totalCount > 0 {
+		avg = totalSum / totalCount
+	}
+
+	slowCount := totalSlow
+	if slowMs != defaultSlowMs {
+		var e *errors.Error
+		slowCount, e = s.countSlow(ctx, from, to, slowMs)
+		if e != nil {
+			return nil, e
+		}
+	}
+
+	return &ApiLatencySummary{
+		Count:      totalCount,
+		AvgLatency: avg,
+		Count5xx:   total5xx,
+		SlowCount:  slowCount,
+		UpdatedAt:  time.Now().Unix(),
+	}, nil
+}
+
+func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, methods, negMethods []string, uriPrefix string, statuses []string, sortBy string, asc bool) (*cache.PageCache[ApiLatencyRank], *errors.Error) {
+	//  随机报错
+	if rand.IntN(2) == 0 {
+		return nil, errors.Sys("simulated random error for test")
+	}
+
 	if start == 0 || end == 0 || start > end {
 		return nil, errors.Verify("invalid time range")
 	}
-	if limit <= 0 {
-		limit = 10
+	if size <= 0 {
+		size = 10
+	}
+	if page <= 0 {
+		page = 1
 	}
 	cond := map[string]any{
 		"at": map[string]any{
@@ -237,6 +366,21 @@ func (s *Serv) Top(ctx context.Context, start, end int64, methods []string, uriP
 			cond["method"] = map[string]any{"$in": vals}
 		}
 	}
+	if len(negMethods) == 1 {
+		cond["method"] = map[string]any{"$ne": strings.ToUpper(negMethods[0])}
+	} else if len(negMethods) > 1 {
+		var vals []string
+		for _, m := range negMethods {
+			if strings.TrimSpace(m) == "" {
+				continue
+			}
+			vals = append(vals, strings.ToUpper(m))
+		}
+		if len(vals) > 0 {
+			cond["method"] = map[string]any{"$nin": vals}
+		}
+	}
+
 	if strings.TrimSpace(uriPrefix) != "" {
 		cond["uri"] = map[string]any{"$like": uriPrefix + "%"}
 	}
@@ -260,80 +404,68 @@ func (s *Serv) Top(ctx context.Context, start, end int64, methods []string, uriP
 		{Field: "maxLatencyOther", Agg: cache.AggMax, Alias: "mo"},
 	}
 
-	orderExpr, errSort := buildLatencyOrder(sortBy)
+	sorter, errSort := buildLatencySorter(sortBy, asc)
 	if errSort != nil {
 		return nil, errSort
 	}
 
-	grouped, err := s.storage.GroupByFields(cond, groupFields, aggFields, limit, cache.PageSorter{SortField: orderExpr.field, Expr: orderExpr.expr, Asc: asc})
+	statusSet := buildStatusSet(statuses)
+	if len(statusSet) > 0 {
+		var havingParts []string
+		if _, ok := statusSet["2xx"]; ok {
+			havingParts = append(havingParts, "c2 > 0")
+		}
+		if _, ok := statusSet["4xx"]; ok {
+			havingParts = append(havingParts, "c4 > 0")
+		}
+		if _, ok := statusSet["5xx"]; ok {
+			havingParts = append(havingParts, "c5 > 0")
+		}
+		if _, ok := statusSet["other"]; ok {
+			havingParts = append(havingParts, "co > 0")
+		}
+		if len(havingParts) == 0 {
+			return &cache.PageCache[ApiLatencyRank]{
+				Total: 0,
+				Page:  page,
+				Size:  size,
+				Items: []*ApiLatencyRank{},
+			}, nil
+		}
+		cond["$having"] = "(" + strings.Join(havingParts, " OR ") + ")"
+	}
+
+	grouped, err := s.storage.GroupByFields(cond, groupFields, aggFields, page, size, sorter)
 	if err != nil {
 		logger.Error(ctx, "GroupByFields latency failed", zap.Error(err))
 		return nil, errors.Sys("GroupByFields latency failed", err)
 	}
 
-	useStatus := len(statuses) > 0
-	statusSet := make(map[string]struct{})
-	for _, st := range statuses {
-		if strings.TrimSpace(st) == "" {
+	result := make([]*ApiLatencyRank, 0, len(grouped.Items))
+	for _, item := range grouped.Items {
+		totalCount := int64(item.Value["cnt"])
+		if totalCount == 0 {
 			continue
 		}
-		statusSet[strings.ToLower(st)] = struct{}{}
-	}
 
-	result := make([]*ApiLatencyRank, 0, len(grouped))
-	for _, item := range grouped {
-		cnt := int64(item.Value["cnt"])
-		sum := int64(item.Value["sum"])
-		maxVal := int64(item.Value["max"])
-
-		if useStatus {
-			cnt = 0
-			sum = 0
-			maxVal = 0
-			if _, ok := statusSet["2xx"]; ok {
-				cnt += int64(item.Value["c2"])
-				sum += int64(item.Value["s2"])
-				if int64(item.Value["m2"]) > maxVal {
-					maxVal = int64(item.Value["m2"])
-				}
-			}
-			if _, ok := statusSet["4xx"]; ok {
-				cnt += int64(item.Value["c4"])
-				sum += int64(item.Value["s4"])
-				if int64(item.Value["m4"]) > maxVal {
-					maxVal = int64(item.Value["m4"])
-				}
-			}
-			if _, ok := statusSet["5xx"]; ok {
-				cnt += int64(item.Value["c5"])
-				sum += int64(item.Value["s5"])
-				if int64(item.Value["m5"]) > maxVal {
-					maxVal = int64(item.Value["m5"])
-				}
-			}
-			if _, ok := statusSet["other"]; ok {
-				cnt += int64(item.Value["co"])
-				sum += int64(item.Value["so"])
-				if int64(item.Value["mo"]) > maxVal {
-					maxVal = int64(item.Value["mo"])
-				}
-			}
-		}
-
-		if cnt == 0 {
-			continue
-		}
-		avg := sum / cnt
+		totalSum := int64(item.Value["sum"])
+		avg := totalSum / totalCount
+		count2xx := int64(item.Value["c2"])
+		count4xx := int64(item.Value["c4"])
+		count5xx := int64(item.Value["c5"])
 		r := &ApiLatencyRank{
 			Method:     item.Group["method"],
 			URI:        item.Group["uri"],
-			Count:      int64(item.Value["cnt"]),
+			Count:      totalCount,
 			AvgLatency: avg,
-			MaxLatency: maxVal,
-			Count2xx:   int64(item.Value["c2"]),
-			Count4xx:   int64(item.Value["c4"]),
-			Count5xx:   int64(item.Value["c5"]),
+			MaxLatency: int64(item.Value["max"]),
+			Count2xx:   count2xx,
+			Count4xx:   count4xx,
+			Count5xx:   count5xx,
 			CountOther: int64(item.Value["co"]),
+		}
+		if totalCount > 0 {
+			r.SuccessRate = float64(count2xx) / float64(totalCount)
 		}
 		result = append(result, r)
 	}
@@ -348,39 +480,323 @@ func (s *Serv) Top(ctx context.Context, start, end int64, methods []string, uriP
 		}
 	}
 
-	return result, nil
+	return &cache.PageCache[ApiLatencyRank]{
+		Total: grouped.Total,
+		Page:  page,
+		Size:  size,
+		Items: result,
+	}, nil
 }
 
-type orderExpr struct {
-	field string
-	expr  string
+func (s *Serv) Sample(ctx context.Context, method, uri string, types []string) (*ApiLatencySampleResp, *errors.Error) {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	uri = strings.TrimSpace(uri)
+	if method == "" || uri == "" {
+		return nil, errors.Verify("method and uri are required")
+	}
+
+	cond := map[string]any{
+		"method": method,
+		"uri":    normalizeURI(uri),
+	}
+	meta, err := s.meta.Get(cond)
+	if err != nil {
+		logger.Error(ctx, "get api latency meta failed", zap.Error(err))
+		return nil, errors.Sys("get api latency meta failed", err)
+	}
+	if meta == nil {
+		return &ApiLatencySampleResp{}, nil
+	}
+
+	typeSet, errSet := buildSampleTypeSet(types)
+	if errSet != nil {
+		return nil, errSet
+	}
+	if len(typeSet) == 0 {
+		typeSet = map[string]struct{}{
+			"latest": {},
+			"2xx":    {},
+			"4xx":    {},
+			"5xx":    {},
+			"slow":   {},
+		}
+	}
+
+	resp := &ApiLatencySampleResp{}
+	if _, ok := typeSet["latest"]; ok {
+		resp.Latest = meta.SampleLatest
+	}
+	if _, ok := typeSet["2xx"]; ok {
+		resp.Sample2xx = meta.Sample2xx
+	}
+	if _, ok := typeSet["4xx"]; ok {
+		resp.Sample4xx = meta.Sample4xx
+	}
+	if _, ok := typeSet["5xx"]; ok {
+		resp.Sample5xx = meta.Sample5xx
+	}
+	if _, ok := typeSet["slow"]; ok {
+		resp.SampleSlow = meta.SampleSlow
+	}
+
+	return resp, nil
 }
 
-func buildLatencyOrder(sortBy string) (orderExpr, *errors.Error) {
+func buildLatencySorter(sortBy string, asc bool) (cache.PageSorter, *errors.Error) {
 	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
 	if sortBy == "" {
 		sortBy = "avg"
 	}
+	sorter := cache.PageSorter{Asc: asc}
 	switch sortBy {
 	case "avg":
-		return orderExpr{field: "avg", expr: "sum / NULLIF(cnt,0)"}, nil
+		sorter.Expr = "sum / NULLIF(cnt,0)"
 	case "max":
-		return orderExpr{field: "max"}, nil
+		sorter.SortField = "max"
 	case "count", "cnt":
-		return orderExpr{field: "cnt"}, nil
+		sorter.SortField = "cnt"
 	case "2xx":
-		return orderExpr{field: "c2"}, nil
+		sorter.SortField = "c2"
 	case "4xx":
-		return orderExpr{field: "c4"}, nil
+		sorter.SortField = "c4"
 	case "5xx":
-		return orderExpr{field: "c5"}, nil
+		sorter.SortField = "c5"
 	case "other":
-		return orderExpr{field: "co"}, nil
-	case "p95":
-		return orderExpr{}, errors.Verify("p95 sorting is not supported yet")
+		sorter.SortField = "co"
+	case "success", "successrate":
+		sorter.Expr = "c2 / NULLIF(cnt,0)"
 	default:
-		return orderExpr{}, errors.Verify(fmt.Sprintf("unsupported sortBy: %s", sortBy))
+		return cache.PageSorter{}, errors.Verify(fmt.Sprintf("unsupported sortBy: %s", sortBy))
 	}
+	return sorter, nil
+}
+
+func buildLogSample(rec *logtool.LogRecord) ApiLogSample {
+	if rec == nil {
+		return ApiLogSample{}
+	}
+	data := make(map[string]string, len(rec.Data))
+	for k, v := range rec.Data {
+		data[k] = v
+	}
+	return ApiLogSample{
+		Msg:   rec.Msg,
+		Error: rec.Error,
+		Data:  data,
+	}
+}
+
+func cloneSample(sample *ApiLatencySample) *ApiLatencySample {
+	if sample == nil {
+		return nil
+	}
+	cp := *sample
+	if sample.InLog.Data != nil {
+		inData := make(map[string]string, len(sample.InLog.Data))
+		for k, v := range sample.InLog.Data {
+			inData[k] = v
+		}
+		cp.InLog.Data = inData
+	}
+	if sample.OutLog.Data != nil {
+		outData := make(map[string]string, len(sample.OutLog.Data))
+		for k, v := range sample.OutLog.Data {
+			outData[k] = v
+		}
+		cp.OutLog.Data = outData
+	}
+	return &cp
+}
+
+func updateSampleLatest(meta *ApiLatencyMeta, sample *ApiLatencySample) {
+	if meta == nil || sample == nil {
+		return
+	}
+	if meta.SampleLatest == nil || sample.RequestAt > meta.SampleLatest.RequestAt {
+		meta.SampleLatest = cloneSample(sample)
+		meta.SampleTrace = sample.TraceID
+		meta.SampleStatus = sample.Status
+	}
+}
+
+func updateSampleByTime(dst **ApiLatencySample, sample *ApiLatencySample) {
+	if sample == nil {
+		return
+	}
+	if *dst == nil || sample.RequestAt > (*dst).RequestAt {
+		*dst = cloneSample(sample)
+	}
+}
+
+func updateSampleSlow(meta *ApiLatencyMeta, sample *ApiLatencySample) {
+	if meta == nil || sample == nil {
+		return
+	}
+	if meta.SampleSlow == nil ||
+		sample.LatencyMs > meta.SampleSlow.LatencyMs ||
+		(sample.LatencyMs == meta.SampleSlow.LatencyMs && sample.RequestAt > meta.SampleSlow.RequestAt) {
+		meta.SampleSlow = cloneSample(sample)
+	}
+}
+
+func mergeSampleLatest(meta *ApiLatencyMeta, sample *ApiLatencySample) {
+	if meta == nil || sample == nil {
+		return
+	}
+	if meta.SampleLatest == nil || sample.RequestAt > meta.SampleLatest.RequestAt {
+		meta.SampleLatest = cloneSample(sample)
+		meta.SampleTrace = sample.TraceID
+		meta.SampleStatus = sample.Status
+	}
+}
+
+func mergeSampleByTime(dst **ApiLatencySample, sample *ApiLatencySample) {
+	if sample == nil {
+		return
+	}
+	if *dst == nil || sample.RequestAt > (*dst).RequestAt {
+		*dst = cloneSample(sample)
+	}
+}
+
+func mergeSampleSlow(meta *ApiLatencyMeta, sample *ApiLatencySample) {
+	if meta == nil || sample == nil {
+		return
+	}
+	if meta.SampleSlow == nil ||
+		sample.LatencyMs > meta.SampleSlow.LatencyMs ||
+		(sample.LatencyMs == meta.SampleSlow.LatencyMs && sample.RequestAt > meta.SampleSlow.RequestAt) {
+		meta.SampleSlow = cloneSample(sample)
+	}
+}
+
+func buildSampleTypeSet(types []string) (map[string]struct{}, *errors.Error) {
+	typeSet := make(map[string]struct{})
+	for _, t := range types {
+		val := strings.ToLower(strings.TrimSpace(t))
+		if val == "" {
+			continue
+		}
+		switch val {
+		case "latest", "2xx", "4xx", "5xx", "slow":
+			typeSet[val] = struct{}{}
+		default:
+			return nil, errors.Verify(fmt.Sprintf("unsupported type: %s", t))
+		}
+	}
+	return typeSet, nil
+}
+
+func normalizeURI(uri string) string {
+	if uri == "" {
+		return ""
+	}
+	if idx := strings.Index(uri, "?"); idx >= 0 {
+		return uri[:idx]
+	}
+	return uri
+}
+
+func buildStatusSet(statuses []string) map[string]struct{} {
+	statusSet := make(map[string]struct{})
+	for _, st := range statuses {
+		if strings.TrimSpace(st) == "" {
+			continue
+		}
+		statusSet[strings.ToLower(st)] = struct{}{}
+	}
+	return statusSet
+}
+
+func hasStatusMatch(statusSet map[string]struct{}, item *cache.PageGroupItem) bool {
+	if len(statusSet) == 0 {
+		return true
+	}
+	if _, ok := statusSet["2xx"]; ok && int64(item.Value["c2"]) > 0 {
+		return true
+	}
+	if _, ok := statusSet["4xx"]; ok && int64(item.Value["c4"]) > 0 {
+		return true
+	}
+	if _, ok := statusSet["5xx"]; ok && int64(item.Value["c5"]) > 0 {
+		return true
+	}
+	if _, ok := statusSet["other"]; ok && int64(item.Value["co"]) > 0 {
+		return true
+	}
+	return false
+}
+
+func (s *Serv) countSlow(ctx context.Context, start, end time.Time, slowMs int64) (int64, *errors.Error) {
+	opts := logtool.SearchOptions{
+		StartTime: start.Format(time.DateTime),
+		EndTime:   end.Format(time.DateTime),
+		Categories: []string{
+			"rest",
+			"invoke",
+		},
+		Levels: []string{logtool.InfoLevel.Str(), logtool.WarnLevel.Str(), logtool.ErrorLevel.Str()},
+		Size:   logSearchMaxSize,
+	}
+	logs, e := logtool.SearchLogs(opts)
+	if e != nil {
+		logger.Error(ctx, "slow count search failed", zap.Error(e))
+		return 0, errors.Sys("slow count search failed", e)
+	}
+
+	type inRecord struct {
+		at time.Time
+	}
+	type outRecord struct {
+		at time.Time
+	}
+
+	inMap := make(map[string]inRecord)
+	outMap := make(map[string]outRecord)
+
+	for _, item := range logs {
+		rec := item.Record
+		if rec == nil {
+			continue
+		}
+		trace := strings.TrimSpace(rec.TraceID)
+		if trace == "" {
+			continue
+		}
+		msg := strings.ToUpper(strings.TrimSpace(rec.Msg))
+		switch msg {
+		case "IN":
+			tm := parseTime(rec.Time)
+			if tm.IsZero() {
+				continue
+			}
+			inMap[trace] = inRecord{at: tm}
+		case "OUT":
+			tm := parseTime(rec.Time)
+			if tm.IsZero() {
+				continue
+			}
+			outMap[trace] = outRecord{at: tm}
+		default:
+			continue
+		}
+	}
+
+	var slowCount int64
+	for trace, in := range inMap {
+		out, ok := outMap[trace]
+		if !ok || in.at.IsZero() || out.at.IsZero() {
+			continue
+		}
+		latency := out.at.Sub(in.at).Milliseconds()
+		if latency < 0 {
+			continue
+		}
+		if latency > slowMs {
+			slowCount++
+		}
+	}
+	return slowCount, nil
 }
 
 func parseTime(val string) time.Time {

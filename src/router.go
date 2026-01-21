@@ -9,6 +9,7 @@ import (
 	"github.com/jom-io/gorig-om/src/logtool"
 	"github.com/jom-io/gorig-om/src/mid"
 	"github.com/jom-io/gorig-om/src/omuser"
+	"github.com/jom-io/gorig-om/src/stat/apistat"
 	"github.com/jom-io/gorig-om/src/stat/errstat"
 	"github.com/jom-io/gorig/global/variable"
 	"github.com/jom-io/gorig/httpx"
@@ -84,5 +85,9 @@ func Setup() {
 		e := om.Group("stat")
 		e.GET("error/time", errstat.TimeRange)
 		e.GET("error/top", errstat.Top)
+		//e.GET("api/time", apistat.TimeRange)
+		e.GET("api/summary", apistat.Summary)
+		e.GET("api/top", apistat.Top)
+		e.GET("api/sample", apistat.Sample)
 	})
 }
