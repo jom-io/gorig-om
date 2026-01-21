@@ -85,7 +85,7 @@ func Setup() {
 		e := om.Group("stat")
 		e.GET("error/time", errstat.TimeRange)
 		e.GET("error/top", errstat.Top)
-		//e.GET("api/time", apistat.TimeRange)
+		e.GET("api/time", apistat.TimeRange)
 		e.GET("api/summary", apistat.Summary)
 		e.GET("api/top", apistat.Top)
 		e.GET("api/sample", apistat.Sample)

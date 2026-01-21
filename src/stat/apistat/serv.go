@@ -332,10 +332,6 @@ func (s *Serv) Summary(ctx context.Context, start, end int64, slowMs int64) (*Ap
 }
 
 func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, methods, negMethods []string, uriPrefix string, statuses []string, sortBy string, asc bool) (*cache.PageCache[ApiLatencyRank], *errors.Error) {
-	//  随机报错
-	if rand.IntN(2) == 0 {
-		return nil, errors.Sys("simulated random error for test")
-	}
 
 	if start == 0 || end == 0 || start > end {
 		return nil, errors.Verify("invalid time range")
