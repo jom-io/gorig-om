@@ -106,10 +106,18 @@ func (s *Serv) Collect(ctx context.Context) {
 	sigMeta := make(map[string]*ErrSigMeta)
 
 	for _, log := range logs {
+		if log.Record == nil {
+			continue
+		}
 		level := logtool.Level(log.Record.Level).Str()
 		signature := buildSignature(log.Record.Msg, log.Record.Error)
 		if signature == "" {
 			continue
+		}
+		logAt := parseErrTime(log.Record.Time)
+		logAtUnix := nowBucket
+		if !logAt.IsZero() {
+			logAtUnix = logAt.Unix()
 		}
 		sigHash := hashSignature(level, signature)
 
@@ -127,8 +135,21 @@ func (s *Serv) Collect(ctx context.Context) {
 				SampleMsg:   log.Record.Msg,
 				SampleError: log.Record.Error,
 				SampleTrace: log.Record.TraceID,
-				FirstAt:     nowBucket,
-				LastAt:      nowBucket,
+				FirstAt:     logAtUnix,
+				LastAt:      logAtUnix,
+			}
+		} else {
+			meta := sigMeta[sigHash]
+			if meta != nil {
+				if logAtUnix < meta.FirstAt || meta.FirstAt == 0 {
+					meta.FirstAt = logAtUnix
+				}
+				if logAtUnix > meta.LastAt {
+					meta.LastAt = logAtUnix
+					meta.SampleMsg = log.Record.Msg
+					meta.SampleError = log.Record.Error
+					meta.SampleTrace = log.Record.TraceID
+				}
 			}
 		}
 		sigAgg[sigHash].Count++
@@ -147,14 +168,17 @@ func (s *Serv) Collect(ctx context.Context) {
 			}
 		} else {
 			updated := *existingMeta
-			updated.LastAt = nowBucket
-			if updated.SampleMsg == "" && sigMeta[hash].SampleMsg != "" {
+			if sigMeta[hash].FirstAt != 0 && (updated.FirstAt == 0 || sigMeta[hash].FirstAt < updated.FirstAt) {
+				updated.FirstAt = sigMeta[hash].FirstAt
+			}
+			if sigMeta[hash].LastAt > updated.LastAt {
+				updated.LastAt = sigMeta[hash].LastAt
 				updated.SampleMsg = sigMeta[hash].SampleMsg
-			}
-			if updated.SampleError == "" && sigMeta[hash].SampleError != "" {
 				updated.SampleError = sigMeta[hash].SampleError
-			}
-			if updated.SampleTrace == "" && sigMeta[hash].SampleTrace != "" {
+				updated.SampleTrace = sigMeta[hash].SampleTrace
+			} else if updated.SampleTrace == "" && sigMeta[hash].SampleTrace != "" {
+				updated.SampleMsg = sigMeta[hash].SampleMsg
+				updated.SampleError = sigMeta[hash].SampleError
 				updated.SampleTrace = sigMeta[hash].SampleTrace
 			}
 			_ = s.sigMeta.Update(metaCond, &updated)
@@ -353,4 +377,22 @@ func applyMeta(rank *ErrSigRank, meta *ErrSigMeta) {
 	if meta.LastAt != 0 {
 		rank.LastAt = meta.LastAt
 	}
+}
+
+func parseErrTime(val string) time.Time {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return time.Time{}
+	}
+	layouts := []string{
+		"2006-01-02 15:04:05.000",
+		"2006-01-02 15:04:05",
+		time.RFC3339Nano,
+	}
+	for _, l := range layouts {
+		if t, err := time.ParseInLocation(l, val, time.Local); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
