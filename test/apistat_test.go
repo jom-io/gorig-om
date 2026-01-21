@@ -117,7 +117,7 @@ func TestApiStatWorkflow(t *testing.T) {
 	end := time.Now().Unix()
 
 	t.Run("TopPage", func(t *testing.T) {
-		page, err := s.TopPage(ctx, start, end, 1, 10, nil, nil, "/__apistat_test__", nil, "success", false)
+		page, err := s.TopPage(ctx, start, end, 1, 10, nil, nil, "/__apistat_test__", "", nil, "success", false)
 		if err != nil {
 			t.Fatalf("TopPage failed: %v", err)
 		}
@@ -165,7 +165,7 @@ func TestApiStatWorkflow(t *testing.T) {
 	})
 
 	t.Run("TopPageStatusFilter", func(t *testing.T) {
-		page, err := s.TopPage(ctx, start, end, 1, 10, nil, nil, "/__apistat_test__", []string{"5xx"}, "count", false)
+		page, err := s.TopPage(ctx, start, end, 1, 10, nil, nil, "/__apistat_test__", "", []string{"5xx"}, "count", false)
 		if err != nil {
 			t.Fatalf("TopPage status filter failed: %v", err)
 		}
@@ -280,7 +280,7 @@ func TestApiStatCollectCounts4xx(t *testing.T) {
 
 	start := time.Now().Add(-1 * time.Minute).Unix()
 	end := time.Now().Unix()
-	page, topErr := s.TopPage(context.Background(), start, end, 1, 10, nil, nil, "/__apistat_test__", []string{"4xx"}, "count", false)
+	page, topErr := s.TopPage(context.Background(), start, end, 1, 10, nil, nil, "/__apistat_test__", "", []string{"4xx"}, "count", false)
 	if topErr != nil {
 		t.Fatalf("TopPage failed: %v", topErr)
 	}

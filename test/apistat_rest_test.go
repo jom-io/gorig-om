@@ -79,7 +79,7 @@ func TestApiStatRestLogFile(t *testing.T) {
 	end := nowBucket + 60
 
 	t.Run("TopPage", func(t *testing.T) {
-		page, err := apistat.S().TopPage(ctx, start, end, 1, int64(len(agg)), nil, nil, "", nil, "count", false)
+		page, err := apistat.S().TopPage(ctx, start, end, 1, int64(len(agg)), nil, nil, "", "", nil, "count", false)
 		if err != nil {
 			t.Fatalf("TopPage failed: %v", err)
 		}

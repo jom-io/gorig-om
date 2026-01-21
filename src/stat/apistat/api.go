@@ -42,6 +42,7 @@ func Top(ctx *gin.Context) {
 	methods, err := apix.GetParamArray[string](ctx, "methods", apix.NotForce)
 	negMethods, err := apix.GetParamArray[string](ctx, "negMethods", apix.NotForce)
 	uriPrefix, err := apix.GetParamStr(ctx, "uriPrefix")
+	uriLike, err := apix.GetParamStr(ctx, "uriLike")
 	statuses, err := apix.GetParamArray[string](ctx, "statuses", apix.NotForce)
 	sortBy, err := apix.GetParamStr(ctx, "sortBy", "avg")
 	asc, err := apix.GetParamBool(ctx, "asc", false)
@@ -49,7 +50,7 @@ func Top(ctx *gin.Context) {
 		return
 	}
 
-	data, e := S().TopPage(ctx, start, end, pageReq.Page, pageReq.Size, methods, negMethods, uriPrefix, statuses, sortBy, asc)
+	data, e := S().TopPage(ctx, start, end, pageReq.Page, pageReq.Size, methods, negMethods, uriPrefix, uriLike, statuses, sortBy, asc)
 	apix.HandleData(ctx, consts.CurdSelectFailCode, data, e)
 }
 

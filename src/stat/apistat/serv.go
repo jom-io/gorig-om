@@ -330,7 +330,7 @@ func (s *Serv) Summary(ctx context.Context, start, end int64, slowMs int64) (*Ap
 	}, nil
 }
 
-func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, methods, negMethods []string, uriPrefix string, statuses []string, sortBy string, asc bool) (*cache.PageCache[ApiLatencyRank], *errors.Error) {
+func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, methods, negMethods []string, uriPrefix, uriLike string, statuses []string, sortBy string, asc bool) (*cache.PageCache[ApiLatencyRank], *errors.Error) {
 
 	if start == 0 || end == 0 || start > end {
 		return nil, errors.Verify("invalid time range")
@@ -376,7 +376,9 @@ func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, 
 		}
 	}
 
-	if strings.TrimSpace(uriPrefix) != "" {
+	if strings.TrimSpace(uriLike) != "" {
+		cond["uri"] = map[string]any{"$like": "%" + uriLike + "%"}
+	} else if strings.TrimSpace(uriPrefix) != "" {
 		cond["uri"] = map[string]any{"$like": uriPrefix + "%"}
 	}
 
