@@ -9,7 +9,6 @@ import (
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
 	"go.uber.org/zap"
-	"math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
