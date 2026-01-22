@@ -52,6 +52,7 @@ func TestApiStatWorkflow(t *testing.T) {
 		{method: "GET", uri: "/__apistat_test__/beta", status: 404, latencyMs: 130},
 		{method: "POST", uri: "/__apistat_test__/gamma", status: 200, latencyMs: 250},
 		{method: "POST", uri: "/__apistat_test__/gamma", status: 200, latencyMs: 150},
+		{method: "OPTIONS", uri: "/__apistat_test__/options", status: 200, latencyMs: 1000},
 	}
 	slowThreshold := int64(200)
 
@@ -182,11 +183,14 @@ func TestApiStatWorkflow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Summary failed: %v", err)
 		}
-		if sum.Count < 5 {
-			t.Fatalf("Summary count too small: %d", sum.Count)
+		if sum.Count != 5 {
+			t.Fatalf("Summary count expected 5, got: %d", sum.Count)
 		}
 		if sum.Count5xx < 1 {
 			t.Fatalf("Summary 5xx too small: %d", sum.Count5xx)
+		}
+		if sum.AvgLatency != 173 {
+			t.Fatalf("Summary avgLatency expected 173, got: %d", sum.AvgLatency)
 		}
 		if sum.SlowCount != 1 {
 			t.Fatalf("Summary slowCount expected 1, got: %d", sum.SlowCount)

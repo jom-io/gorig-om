@@ -93,13 +93,14 @@ type ApiLatencySampleResp struct {
 type ApiStatType string
 
 const (
-	ApiStatCount      ApiStatType = "count"
-	ApiStatCountSlow  ApiStatType = "countSlow"
-	ApiStatCount2xx   ApiStatType = "count2xx"
-	ApiStatCount4xx   ApiStatType = "count4xx"
-	ApiStatCount5xx   ApiStatType = "count5xx"
-	ApiStatCountOther ApiStatType = "countOther"
-	ApiStatSumLatency ApiStatType = "sumLatency"
+	ApiStatCount         ApiStatType = "count"
+	ApiStatCountSlow     ApiStatType = "countSlow"
+	ApiStatCount2xx      ApiStatType = "count2xx"
+	ApiStatCount4xx      ApiStatType = "count4xx"
+	ApiStatCount5xx      ApiStatType = "count5xx"
+	ApiStatCountOther    ApiStatType = "countOther"
+	ApiStatSumLatency    ApiStatType = "sumLatency"
+	ApiStatSumLatency2xx ApiStatType = "sumLatency2xx"
 )
 
 func (t ApiStatType) String() string {

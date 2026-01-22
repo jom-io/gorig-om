@@ -24,6 +24,8 @@ const (
 	logSearchMaxSize       = 50000
 )
 
+var summaryExcludeMethods = []string{"OPTIONS", "HEAD", "PATCH"}
+
 type Serv struct {
 	storage cache.Pager[ApiLatencyStat]
 	meta    cache.Pager[ApiLatencyMeta]
@@ -260,14 +262,24 @@ func (s *Serv) TimeRange(ctx context.Context, start, end int64, granularity cach
 		granularity = cache.GranularityHour
 	}
 	fields := make([]string, 0, len(field))
+	include2xx := false
 	for _, f := range field {
 		fields = append(fields, f.String())
+		if f == ApiStatCount2xx {
+			include2xx = true
+		}
 	}
 	if len(fields) == 0 {
 		fields = []string{ApiStatCount2xx.String(), ApiStatCount4xx.String(), ApiStatCount5xx.String()}
+		include2xx = true
 	}
 
-	result, err := s.storage.GroupByTime(nil, from, to, granularity, cache.AggSum, fields...)
+	cond := map[string]any{}
+	if include2xx && len(summaryExcludeMethods) > 0 {
+		cond["method"] = map[string]any{"$nin": summaryExcludeMethods}
+	}
+
+	result, err := s.storage.GroupByTime(cond, from, to, granularity, cache.AggSum, fields...)
 	if err != nil {
 		logger.Error(ctx, "GroupByTime failed", zap.Error(err))
 		return nil, errors.Sys("GroupByTime failed", err)
@@ -285,11 +297,18 @@ func (s *Serv) Summary(ctx context.Context, start, end int64, slowMs int64) (*Ap
 		slowMs = defaultSlowMs
 	}
 
-	items, err := s.storage.GroupByTime(nil, from, to, cache.GranularityMinute, cache.AggSum,
+	cond := map[string]any{}
+	if len(summaryExcludeMethods) > 0 {
+		cond["method"] = map[string]any{"$nin": summaryExcludeMethods}
+	}
+
+	items, err := s.storage.GroupByTime(cond, from, to, cache.GranularityMinute, cache.AggSum,
 		ApiStatCount.String(),
 		ApiStatSumLatency.String(),
 		ApiStatCount5xx.String(),
 		ApiStatCountSlow.String(),
+		ApiStatCount2xx.String(),
+		ApiStatSumLatency2xx.String(),
 	)
 	if err != nil {
 		logger.Error(ctx, "GroupByTime summary failed", zap.Error(err))
@@ -297,25 +316,27 @@ func (s *Serv) Summary(ctx context.Context, start, end int64, slowMs int64) (*Ap
 	}
 
 	var totalCount int64
-	var totalSum int64
 	var total5xx int64
 	var totalSlow int64
+	var total2xx int64
+	var totalSum2xx int64
 	for _, item := range items {
 		totalCount += int64(item.Value[ApiStatCount.String()])
-		totalSum += int64(item.Value[ApiStatSumLatency.String()])
 		total5xx += int64(item.Value[ApiStatCount5xx.String()])
 		totalSlow += int64(item.Value[ApiStatCountSlow.String()])
+		total2xx += int64(item.Value[ApiStatCount2xx.String()])
+		totalSum2xx += int64(item.Value[ApiStatSumLatency2xx.String()])
 	}
 
 	var avg int64
-	if totalCount > 0 {
-		avg = totalSum / totalCount
+	if total2xx > 0 {
+		avg = totalSum2xx / total2xx
 	}
 
 	slowCount := totalSlow
 	if slowMs != defaultSlowMs {
 		var e *errors.Error
-		slowCount, e = s.countSlow(ctx, from, to, slowMs)
+		slowCount, e = s.countSlow(ctx, from, to, slowMs, summaryExcludeMethods)
 		if e != nil {
 			return nil, e
 		}
@@ -724,7 +745,7 @@ func hasStatusMatch(statusSet map[string]struct{}, item *cache.PageGroupItem) bo
 	return false
 }
 
-func (s *Serv) countSlow(ctx context.Context, start, end time.Time, slowMs int64) (int64, *errors.Error) {
+func (s *Serv) countSlow(ctx context.Context, start, end time.Time, slowMs int64, excludedMethods []string) (int64, *errors.Error) {
 	opts := logtool.SearchOptions{
 		StartTime: start.Format(time.DateTime),
 		EndTime:   end.Format(time.DateTime),
@@ -742,7 +763,8 @@ func (s *Serv) countSlow(ctx context.Context, start, end time.Time, slowMs int64
 	}
 
 	type inRecord struct {
-		at time.Time
+		at     time.Time
+		method string
 	}
 	type outRecord struct {
 		at time.Time
@@ -767,7 +789,8 @@ func (s *Serv) countSlow(ctx context.Context, start, end time.Time, slowMs int64
 			if tm.IsZero() {
 				continue
 			}
-			inMap[trace] = inRecord{at: tm}
+			method := strings.ToUpper(strings.TrimSpace(rec.Data["method"]))
+			inMap[trace] = inRecord{at: tm, method: method}
 		case "OUT":
 			tm := parseTime(rec.Time)
 			if tm.IsZero() {
@@ -780,10 +803,16 @@ func (s *Serv) countSlow(ctx context.Context, start, end time.Time, slowMs int64
 	}
 
 	var slowCount int64
+	excludeSet := buildMethodSet(excludedMethods)
 	for trace, in := range inMap {
 		out, ok := outMap[trace]
 		if !ok || in.at.IsZero() || out.at.IsZero() {
 			continue
+		}
+		if len(excludeSet) > 0 {
+			if _, ok := excludeSet[in.method]; ok {
+				continue
+			}
 		}
 		latency := out.at.Sub(in.at).Milliseconds()
 		if latency < 0 {
@@ -822,4 +851,19 @@ func parseStatus(val string) int {
 		return i
 	}
 	return 0
+}
+
+func buildMethodSet(methods []string) map[string]struct{} {
+	if len(methods) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(methods))
+	for _, m := range methods {
+		val := strings.ToUpper(strings.TrimSpace(m))
+		if val == "" {
+			continue
+		}
+		set[val] = struct{}{}
+	}
+	return set
 }
