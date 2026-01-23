@@ -7,6 +7,7 @@ toolchain go1.23.4
 require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gin-gonic/gin v1.9.1
+	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e
 	github.com/jom-io/gorig v0.0.52
 	github.com/rs/xid v1.5.0
 	github.com/shirou/gopsutil/v4 v4.25.4
@@ -15,6 +16,8 @@ require (
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.22.0
 )
+
+replace github.com/jom-io/gorig => ../gorig
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect

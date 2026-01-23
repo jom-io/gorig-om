@@ -11,6 +11,8 @@ import (
 	"github.com/jom-io/gorig-om/src/omuser"
 	"github.com/jom-io/gorig-om/src/stat/apistat"
 	"github.com/jom-io/gorig-om/src/stat/errstat"
+	"github.com/jom-io/gorig-om/src/stat/gorstat"
+	"github.com/jom-io/gorig-om/src/stat/memstat"
 	"github.com/jom-io/gorig/global/variable"
 	"github.com/jom-io/gorig/httpx"
 	_ "github.com/tidwall/gjson"
@@ -89,5 +91,11 @@ func Setup() {
 		e.GET("api/summary", apistat.Summary)
 		e.GET("api/top", apistat.Top)
 		e.GET("api/sample", apistat.Sample)
+		e.GET("goroutine/time", gorstat.TimeRange)
+		e.GET("mem/big/top", memstat.BigTop)
+		e.GET("mem/big/count", memstat.BigCount)
+		e.GET("mem/leak/latest", memstat.LeakLatest)
+		e.GET("mem/leak/count", memstat.LeakCount)
+		e.GET("mem/leak/page", memstat.LeakPage)
 	})
 }
