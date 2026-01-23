@@ -1,0 +1,1 @@
+import{j as r}from"./index-rXTuJ1Ku.js";import{r as t}from"./vendor-core-D3G3Pc5t.js";import{A as s}from"./vendor-charts-C0vSEv4L.js";var o="apexcharts-wrapper";function p(a){return r.jsx("div",{className:o,children:r.jsx(s,{...a})})}const c=t.memo(p);export{c as C};
