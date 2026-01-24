@@ -24,10 +24,11 @@ import (
 const (
 	bigSampleInterval    = 5 * time.Minute
 	leakCheckInterval    = 10 * time.Second
-	leakGCWindow         = 3
-	leakAllocDelta       = 200 * 1024 * 1024
-	leakObjectDelta      = 200000
+	leakGCWindow         = 5
+	leakAllocDelta       = 100 * 1024 * 1024
+	leakObjectDelta      = 100000
 	leakCooldown         = 2 * time.Minute
+	leakMinSampleGap     = time.Minute
 	bigSampleTopLimit    = 50
 	bigMinInuseSpace     = int64(1 << 20)
 	leakTopLimit         = 10
@@ -39,6 +40,9 @@ const (
 
 var memServ *Serv
 var leakTestHold [][]byte
+var leakTestSmallHold [][]byte
+var leakTestStringHold []string
+var leakTestMapHold []map[string][]byte
 
 type Serv struct {
 	bigStorage  cache.Pager[BigObjStat]
@@ -258,6 +262,13 @@ func (s *Serv) checkLeak(ctx context.Context) {
 	}
 
 	s.mu.Lock()
+	if len(s.gcSamples) > 0 {
+		lastAt := s.gcSamples[len(s.gcSamples)-1].at
+		if !lastAt.IsZero() && sample.at.Sub(lastAt) < leakMinSampleGap {
+			s.mu.Unlock()
+			return
+		}
+	}
 	s.gcSamples = append(s.gcSamples, sample)
 	if len(s.gcSamples) > leakGCWindow {
 		s.gcSamples = s.gcSamples[len(s.gcSamples)-leakGCWindow:]
@@ -277,19 +288,17 @@ func checkLeakWindow(samples []gcSample) (bool, uint64, uint64) {
 	if len(samples) < leakGCWindow {
 		return false, 0, 0
 	}
-	allocGrowing := true
-	objGrowing := true
-	for i := 1; i < len(samples); i++ {
-		if samples[i].heapAlloc <= samples[i-1].heapAlloc {
-			allocGrowing = false
-		}
-		if samples[i].heapObjects <= samples[i-1].heapObjects {
-			objGrowing = false
-		}
+	first := samples[0]
+	last := samples[len(samples)-1]
+	allocDelta := uint64(0)
+	if last.heapAlloc >= first.heapAlloc {
+		allocDelta = last.heapAlloc - first.heapAlloc
 	}
-	allocDelta := samples[len(samples)-1].heapAlloc - samples[0].heapAlloc
-	objDelta := samples[len(samples)-1].heapObjects - samples[0].heapObjects
-	trigger := (allocGrowing && allocDelta >= leakAllocDelta) || (objGrowing && objDelta >= leakObjectDelta)
+	objDelta := uint64(0)
+	if last.heapObjects >= first.heapObjects {
+		objDelta = last.heapObjects - first.heapObjects
+	}
+	trigger := allocDelta >= leakAllocDelta || objDelta >= leakObjectDelta
 	return trigger, allocDelta, objDelta
 }
 
@@ -699,10 +708,39 @@ func startLeakTest() {
 	if os.Getenv("MEMSTAT_LEAK_TEST") != "1" {
 		return
 	}
-	sizeMB := parseEnvInt("MEMSTAT_LEAK_MB", 20)
-	count := parseEnvInt("MEMSTAT_LEAK_COUNT", 15)
-	interval := parseEnvDuration("MEMSTAT_LEAK_INTERVAL", 2*time.Second)
+	scenes := parseEnvList("MEMSTAT_LEAK_SCENES", []string{"bulk", "small", "strings"})
 	forceGC := os.Getenv("MEMSTAT_LEAK_FORCE_GC") == "1"
+
+	sceneSet := make(map[string]struct{}, len(scenes))
+	for _, scene := range scenes {
+		scene = strings.ToLower(strings.TrimSpace(scene))
+		if scene == "" {
+			continue
+		}
+		sceneSet[scene] = struct{}{}
+	}
+
+	if _, ok := sceneSet["bulk"]; ok {
+		startLeakBulk(forceGC)
+	}
+	if _, ok := sceneSet["small"]; ok {
+		startLeakSmall(forceGC)
+	}
+	if _, ok := sceneSet["strings"]; ok {
+		startLeakStrings(forceGC)
+	}
+	if _, ok := sceneSet["map"]; ok {
+		startLeakMap(forceGC)
+	}
+	if _, ok := sceneSet["slow"]; ok {
+		startLeakSlow(forceGC)
+	}
+}
+
+func startLeakBulk(forceGC bool) {
+	sizeMB := parseEnvInt("MEMSTAT_LEAK_MB", 30)
+	count := parseEnvInt("MEMSTAT_LEAK_COUNT", leakGCWindow+1)
+	interval := parseEnvDuration("MEMSTAT_LEAK_INTERVAL", leakMinSampleGap+5*time.Second)
 	if sizeMB <= 0 || count <= 0 {
 		return
 	}
@@ -723,6 +761,121 @@ func startLeakTest() {
 	}()
 }
 
+func startLeakSmall(forceGC bool) {
+	sizeKB := parseEnvInt("MEMSTAT_LEAK_SMALL_KB", 32)
+	batch := parseEnvInt("MEMSTAT_LEAK_SMALL_BATCH", 30000)
+	count := parseEnvInt("MEMSTAT_LEAK_SMALL_COUNT", leakGCWindow+1)
+	interval := parseEnvDuration("MEMSTAT_LEAK_SMALL_INTERVAL", leakMinSampleGap+5*time.Second)
+	if sizeKB <= 0 || batch <= 0 || count <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for i := 0; i < count; i++ {
+			<-ticker.C
+			for j := 0; j < batch; j++ {
+				buf := make([]byte, sizeKB*1024)
+				if len(buf) > 0 {
+					buf[0] = byte(j)
+				}
+				leakTestSmallHold = append(leakTestSmallHold, buf)
+			}
+			if forceGC {
+				runtime.GC()
+			}
+		}
+	}()
+}
+
+func startLeakStrings(forceGC bool) {
+	strLen := parseEnvInt("MEMSTAT_LEAK_STR_LEN", 1024)
+	batch := parseEnvInt("MEMSTAT_LEAK_STR_BATCH", 30000)
+	count := parseEnvInt("MEMSTAT_LEAK_STR_COUNT", leakGCWindow+1)
+	interval := parseEnvDuration("MEMSTAT_LEAK_STR_INTERVAL", leakMinSampleGap+5*time.Second)
+	if strLen <= 0 || batch <= 0 || count <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for i := 0; i < count; i++ {
+			<-ticker.C
+			for j := 0; j < batch; j++ {
+				buf := make([]byte, strLen)
+				if len(buf) > 0 {
+					buf[0] = byte(i)
+				}
+				if len(buf) > 1 {
+					buf[1] = byte(j)
+				}
+				leakTestStringHold = append(leakTestStringHold, string(buf))
+			}
+			if forceGC {
+				runtime.GC()
+			}
+		}
+	}()
+}
+
+func startLeakMap(forceGC bool) {
+	batch := parseEnvInt("MEMSTAT_LEAK_MAP_BATCH", 30000)
+	valKB := parseEnvInt("MEMSTAT_LEAK_MAP_VAL_KB", 1)
+	count := parseEnvInt("MEMSTAT_LEAK_MAP_COUNT", leakGCWindow+1)
+	interval := parseEnvDuration("MEMSTAT_LEAK_MAP_INTERVAL", leakMinSampleGap+5*time.Second)
+	if batch <= 0 || count <= 0 {
+		return
+	}
+	if valKB < 0 {
+		return
+	}
+	valBytes := valKB * 1024
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for i := 0; i < count; i++ {
+			<-ticker.C
+			m := make(map[string][]byte, batch)
+			for j := 0; j < batch; j++ {
+				key := fmt.Sprintf("k_%d_%d", i, j)
+				var val []byte
+				if valBytes > 0 {
+					val = make([]byte, valBytes)
+					val[0] = byte(j)
+				}
+				m[key] = val
+			}
+			leakTestMapHold = append(leakTestMapHold, m)
+			if forceGC {
+				runtime.GC()
+			}
+		}
+	}()
+}
+
+func startLeakSlow(forceGC bool) {
+	sizeMB := parseEnvInt("MEMSTAT_LEAK_SLOW_MB", 25)
+	count := parseEnvInt("MEMSTAT_LEAK_SLOW_COUNT", leakGCWindow+1)
+	interval := parseEnvDuration("MEMSTAT_LEAK_SLOW_INTERVAL", leakMinSampleGap+5*time.Second)
+	if sizeMB <= 0 || count <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for i := 0; i < count; i++ {
+			<-ticker.C
+			buf := make([]byte, sizeMB*1024*1024)
+			for idx := 0; idx < len(buf); idx += 4096 {
+				buf[idx] = 1
+			}
+			leakTestHold = append(leakTestHold, buf)
+			if forceGC {
+				runtime.GC()
+			}
+		}
+	}()
+}
 func parseEnvInt(key string, def int) int {
 	val := strings.TrimSpace(os.Getenv(key))
 	if val == "" {
@@ -733,6 +886,26 @@ func parseEnvInt(key string, def int) int {
 		return def
 	}
 	return parsed
+}
+
+func parseEnvList(key string, def []string) []string {
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "" {
+		return def
+	}
+	parts := strings.Split(val, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
 }
 
 func parseEnvDuration(key string, def time.Duration) time.Duration {

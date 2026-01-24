@@ -212,7 +212,7 @@ func (s *Serv) getDiskUsage(path string) uint64 {
 }
 
 func (s *Serv) Page(ctx context.Context, page, size int64) (*cache.PageCache[ResUsage], *errors.Error) {
-	logger.Info(ctx, "Host usage page called", zap.Int64("page", page), zap.Int64("size", size))
+	//logger.Info(ctx, "Host usage page called", zap.Int64("page", page), zap.Int64("size", size))
 	items, err := s.storage.Find(page, size, nil, cache.PageSorterDesc("at"))
 	if err != nil {
 		return nil, errors.Verify("FindByPage failed", err)
@@ -223,7 +223,7 @@ func (s *Serv) Page(ctx context.Context, page, size int64) (*cache.PageCache[Res
 func (s *Serv) TimeRange(ctx context.Context, start, end int64, granularity cache.Granularity, field ...ResType) ([]*cache.PageTimeItem, *errors.Error) {
 	from := time.Unix(start, 0)
 	to := time.Unix(end, 0)
-	logger.Info(ctx, "Host usage time range called", zap.Time("from", from), zap.Time("to", to), zap.Any("granularity", granularity), zap.Any("field", field))
+	//logger.Info(ctx, "Host usage time range called", zap.Time("from", from), zap.Time("to", to), zap.Any("granularity", granularity), zap.Any("field", field))
 	if from.IsZero() || to.IsZero() || from.After(to) {
 		return nil, errors.Verify("Invalid time range")
 	}

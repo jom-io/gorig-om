@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/jom-io/gorig-om/src/logtool"
+	"github.com/rs/xid"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -154,4 +155,14 @@ func TestMonitorLogs(t *testing.T) {
 	time.Sleep(10 * time.Second)
 	cancel()
 
+}
+
+// TestFromTranceID tests getting trace ID from context.
+func TestFromTranceID(t *testing.T) {
+	id := xid.New().String()
+	form, e := xid.FromString(id)
+	if e != nil {
+		t.Errorf("FromString() error = %v", e)
+	}
+	t.Logf("original id: %s, from string: %s", id, form.Time())
 }

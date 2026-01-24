@@ -65,3 +65,5 @@ go.work.sum
 
 
 # env file
+src/logtool/OPTIMIZATION.md
+src/logtool/OPTIMIZATION.zh-CN.md

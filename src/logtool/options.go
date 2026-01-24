@@ -17,6 +17,10 @@ type SearchOptions struct {
 	Size     int    `json:"size" form:"size"`
 	LastPath string `json:"lastPath" form:"lastPath"`
 	LastLine int64  `json:"lastLine" form:"lastLine"`
+
+	StartBound       string `json:"-" form:"-"`
+	EndBound         string `json:"-" form:"-"`
+	TimeBoundsInvalid bool   `json:"-" form:"-"`
 }
 
 type MatchedRecord struct {

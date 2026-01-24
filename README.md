@@ -13,6 +13,7 @@ Gorig-OM is the operations management panel for the [Gorig](https://github.com/j
 - Service status monitoring
 - Configuration management
 - Real-time log viewing
+- Built-in stats module (API latency, error signatures, goroutine trends, memory big-object/leak tracking)
 - Secure access control
 
 ## Quick Start
@@ -90,6 +91,7 @@ Gorig-OM 是 [Gorig](https://github.com/jom-io/gorig) 项目的运维管理面�
 - 服务状态监控
 - 配置管理
 - 实时日志查看
+- 内置统计模块（API 延迟、错误签名、协程趋势、内存大对象/泄漏跟踪）
 - 安全访问控制
 
 ## 快速开始

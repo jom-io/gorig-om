@@ -2,13 +2,14 @@ package logtool
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
-	errck "errors"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gin-gonic/gin"
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
+	"github.com/rs/xid"
 	"github.com/spf13/cast"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
@@ -95,12 +96,17 @@ func ListLogFiles(opts SearchOptions) (map[string]string, error) {
 		}
 	}
 
-	var startTime, endTime time.Time
-	if opts.StartTime != "" {
-		startTime, _ = time.ParseInLocation("2006-01-02 15:04:05", opts.StartTime, time.Local)
-	}
-	if opts.EndTime != "" {
-		endTime, _ = time.ParseInLocation("2006-01-02 15:04:05", opts.EndTime, time.Local)
+	startBound := strings.TrimSpace(opts.StartBound)
+	endBound := strings.TrimSpace(opts.EndBound)
+	if startBound == "" && endBound == "" {
+		if strings.TrimSpace(opts.StartTime) != "" || strings.TrimSpace(opts.EndTime) != "" {
+			tmp := opts
+			normalizeTimeBounds(&tmp)
+			if !tmp.TimeBoundsInvalid {
+				startBound = tmp.StartBound
+				endBound = tmp.EndBound
+			}
+		}
 	}
 
 	for _, cat := range newCategories {
@@ -112,55 +118,15 @@ func ListLogFiles(opts SearchOptions) (map[string]string, error) {
 			}
 			if !info.IsDir() && strings.HasSuffix(info.Name(), ".jsonl") {
 				if strings.HasPrefix(info.Name(), cat) {
-					fileTime := strings.TrimSuffix(info.Name(), ".jsonl")
-					if strings.HasPrefix(fileTime, cat+"-") {
-						fileTime = strings.TrimPrefix(fileTime, cat+"-")
-						parseTime, e := time.Parse("2006-01-02T15-04-05.000", fileTime)
-						if e != nil {
-							return nil
-						}
-						localTime := parseTime.In(time.Local)
-
-						if opts.StartTime != "" {
-							if localTime.Before(startTime) {
+					if startBound != "" || endBound != "" {
+						firstTime, lastTime, ok := readLogTimeBounds(path)
+						if ok {
+							if endBound != "" && firstTime > endBound {
 								return nil
 							}
-						}
-					}
-					if opts.EndTime != "" {
-						f, openErr := os.Open(path)
-						if openErr != nil {
-							return nil
-						}
-						defer f.Close()
-
-						reader := bufio.NewReader(f)
-						firstLine := ""
-						for i := 0; i < 10; i++ {
-							line, errRead := reader.ReadString('\n')
-							if errRead != nil && !errck.Is(errRead, io.EOF) {
+							if startBound != "" && lastTime < startBound {
 								return nil
 							}
-							if len(line) > maxLineSize && !endsWithNewline(line) {
-								skipRestOfLine(reader)
-								continue
-							}
-							if strings.TrimSpace(line) == "" {
-								continue
-							}
-							firstLine = line
-							break
-						}
-						if firstLine == "" {
-							return nil
-						}
-						rec := parseLineToLogRecord(firstLine)
-						if rec == nil {
-							return nil
-						}
-						endParseTime, _ := rec.ParsedTime()
-						if endParseTime.After(endTime) {
-							return nil
 						}
 					}
 					result[path] = info.Name()
@@ -178,9 +144,126 @@ func ListLogFiles(opts SearchOptions) (map[string]string, error) {
 	return result, nil
 }
 
+func readLogTimeBounds(path string) (string, string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", false
+	}
+	defer f.Close()
+
+	firstTime, ok := readFirstRecordTimeString(f)
+	if !ok {
+		return "", "", false
+	}
+
+	lastRec, errR := readLastRecord(f)
+	if errR != nil || lastRec == nil || lastRec.Record == nil {
+		return "", "", false
+	}
+	lastTime := normalizeRecordTimeString(lastRec.Record.Time)
+	if lastTime == "" {
+		return "", "", false
+	}
+
+	return firstTime, lastTime, true
+}
+
+func readFirstRecordTimeString(f *os.File) (string, bool) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return "", false
+	}
+
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return "", false
+		}
+		if len(line) > maxLineSize && !endsWithNewline(line) {
+			skipRestOfLine(reader)
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+		rec := parseLineToLogRecord(line)
+		if rec != nil {
+			t := normalizeRecordTimeString(rec.Time)
+			if t != "" {
+				return t, true
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+
+	return "", false
+}
+
 func SearchLogs(opts SearchOptions) ([]MatchedRecord, *errors.Error) {
 	if opts.Size <= 0 {
 		opts.Size = 10
+	}
+
+	traceID := strings.TrimSpace(opts.TraceID)
+	if traceID != "" {
+		missingStart := strings.TrimSpace(opts.StartTime) == ""
+		missingEnd := strings.TrimSpace(opts.EndTime) == ""
+		if missingStart || missingEnd {
+			return searchLogsWithTraceTimeWindow(opts)
+		}
+	}
+
+	return searchLogsOnce(opts)
+}
+
+func searchLogsWithTraceTimeWindow(opts SearchOptions) ([]MatchedRecord, *errors.Error) {
+	traceID := strings.TrimSpace(opts.TraceID)
+	id, err := xid.FromString(traceID)
+	if err != nil {
+		return nil, errors.Verify("invalid traceID")
+	}
+
+	baseTime := id.Time().Local()
+
+	narrowed := opts
+	if strings.TrimSpace(narrowed.StartTime) == "" {
+		startTime := baseTime.Add(-1 * time.Hour)
+		narrowed.StartTime = startTime.Format("2006-01-02 15:04:05")
+	}
+
+	if strings.TrimSpace(narrowed.EndTime) == "" {
+		endTime := baseTime.Add(1 * time.Hour)
+		narrowed.EndTime = endTime.Format("2006-01-02 15:04:05")
+
+		result, err := searchLogsOnce(narrowed)
+		if err != nil || len(result) > 0 {
+			return result, err
+		}
+
+		now := time.Now()
+		if !now.After(endTime) {
+			return result, nil
+		}
+
+		narrowed.EndTime = now.Format("2006-01-02 15:04:05")
+		return searchLogsOnce(narrowed)
+	}
+
+	return searchLogsOnce(narrowed)
+}
+
+func searchLogsOnce(opts SearchOptions) ([]MatchedRecord, *errors.Error) {
+	normalizeTimeBounds(&opts)
+	if opts.TimeBoundsInvalid {
+		return nil, nil
 	}
 
 	files, err := ListLogFiles(opts)
@@ -305,27 +388,19 @@ func postFilter(r LogRecord, opts SearchOptions) bool {
 		return false
 	}
 
-	pt, err := r.ParsedTime()
-	if err != nil {
+	if opts.TimeBoundsInvalid {
 		return false
 	}
 
-	if strings.TrimSpace(opts.StartTime) != "" {
-		startTime, err := time.ParseInLocation("2006-01-02 15:04:05", opts.StartTime, time.Local)
-		if err != nil {
+	if opts.StartBound != "" || opts.EndBound != "" {
+		rt := normalizeRecordTimeString(r.Time)
+		if rt == "" {
 			return false
 		}
-		if !startTime.IsZero() && pt.Before(startTime) {
+		if opts.StartBound != "" && rt < opts.StartBound {
 			return false
 		}
-	}
-
-	if strings.TrimSpace(opts.EndTime) != "" {
-		endTime, err := time.ParseInLocation("2006-01-02 15:04:05", opts.EndTime, time.Local)
-		if err != nil {
-			return false
-		}
-		if !endTime.IsZero() && pt.After(endTime) {
+		if opts.EndBound != "" && rt > opts.EndBound {
 			return false
 		}
 	}
@@ -378,26 +453,18 @@ func matchRecord(r LogRecord, opts SearchOptions) bool {
 	}
 
 	// 3. Time range
-	pt, err := r.ParsedTime()
-	if err != nil {
+	if opts.TimeBoundsInvalid {
 		return false
 	}
-	if strings.TrimSpace(opts.StartTime) != "" {
-		startTime, err := time.ParseInLocation("2006-01-02 15:04:05", opts.StartTime, time.Local)
-		if err != nil {
+	if opts.StartBound != "" || opts.EndBound != "" {
+		rt := normalizeRecordTimeString(r.Time)
+		if rt == "" {
 			return false
 		}
-		if !startTime.IsZero() && pt.Before(startTime) {
+		if opts.StartBound != "" && rt < opts.StartBound {
 			return false
 		}
-	}
-
-	if strings.TrimSpace(opts.EndTime) != "" {
-		endTime, err := time.ParseInLocation("2006-01-02 15:04:05", opts.EndTime, time.Local)
-		if err != nil {
-			return false
-		}
-		if !endTime.IsZero() && pt.After(endTime) {
+		if opts.EndBound != "" && rt > opts.EndBound {
 			return false
 		}
 	}
@@ -423,6 +490,46 @@ func matchRecord(r LogRecord, opts SearchOptions) bool {
 	}
 
 	return true
+}
+
+func normalizeTimeBounds(opts *SearchOptions) {
+	opts.StartBound = ""
+	opts.EndBound = ""
+	opts.TimeBoundsInvalid = false
+
+	start := strings.TrimSpace(opts.StartTime)
+	if start != "" {
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", start, time.Local)
+		if err != nil {
+			opts.TimeBoundsInvalid = true
+			return
+		}
+		opts.StartBound = t.Format("2006-01-02 15:04:05.000")
+	}
+
+	end := strings.TrimSpace(opts.EndTime)
+	if end != "" {
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", end, time.Local)
+		if err != nil {
+			opts.TimeBoundsInvalid = true
+			return
+		}
+		opts.EndBound = t.Format("2006-01-02 15:04:05.000")
+	}
+}
+
+func normalizeRecordTimeString(raw string) string {
+	t := strings.TrimSpace(raw)
+	if t == "" {
+		return ""
+	}
+	if len(t) == 19 {
+		return t + ".000"
+	}
+	if len(t) > 23 {
+		return t[:23]
+	}
+	return t
 }
 
 type ContextLogLine struct {
@@ -519,6 +626,7 @@ func skipRestOfLine(reader *bufio.Reader) {
 
 // MonitorLogs monitors logs based on categories and conditions in real-time
 func MonitorLogs(ctx *gin.Context, opts SearchOptions) *errors.Error {
+	normalizeTimeBounds(&opts)
 
 	ctx.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 	ctx.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -660,50 +768,85 @@ func readLastRecord(f *os.File) (*MatchedRecord, *errors.Error) {
 		return nil, errors.Verify(fmt.Sprintf("unable to get file info: %v", err))
 	}
 
-	buf := make([]byte, 1024)
+	if fi.Size() == 0 {
+		return nil, errors.Verify("log file is empty")
+	}
+
+	const chunkSize = 4096
+	buf := make([]byte, chunkSize)
 	offset := int64(0)
-	for {
-		offset += 1024
-		_, err := f.Seek(-offset, 2)
+	size := fi.Size()
+	var tail []byte
+	for offset < size {
+		readSize := int64(chunkSize)
+		if size-offset < readSize {
+			readSize = size - offset
+		}
+		offset += readSize
+		start := size - offset
+		_, err := f.Seek(start, io.SeekStart)
 		if err != nil {
 			return nil, errors.Verify(fmt.Sprintf("unable to seek file: %v", err))
 		}
 
-		n, err := f.Read(buf)
-		if err != nil {
+		n, err := f.Read(buf[:int(readSize)])
+		if err != nil && err != io.EOF {
 			return nil, errors.Verify(fmt.Sprintf("unable to read file: %v", err))
 		}
-
-		for i := n - 1; i >= 0; i-- {
-			if buf[i] == '\n' {
-				line := string(buf[i+1 : n])
-				if strings.TrimSpace(line) == "" {
-					continue
-				}
-
-				//dataMap := map[string]interface{}{}
-				//if err := json.Unmarshal([]byte(line), &dataMap); err != nil {
-				//	//logger.Error(nil, "unmarshal record error", zap.Error(err))
-				//	return nil, nil
-				//}
-
-				//record := map2LogRecord(dataMap)
-				record := parseLineToLogRecord(line)
-				result := &MatchedRecord{
-					FilePath:   f.Name(),
-					LineNumber: -1,
-					Record:     record,
-				}
-				return result, nil
-			}
+		if n == 0 {
+			continue
 		}
 
-		if offset > fi.Size() {
-			break
+		tail = append(buf[:n], tail...)
+
+		fullRead := offset >= fi.Size()
+		for {
+			line, rest, ok := takeLastLine(tail, fullRead)
+			if !ok {
+				break
+			}
+			tail = rest
+			if len(line) > maxLineSize {
+				continue
+			}
+			if strings.TrimSpace(string(line)) == "" {
+				continue
+			}
+			record := parseLineToLogRecord(string(line))
+			if record == nil || record.Time == "" {
+				continue
+			}
+			result := &MatchedRecord{
+				FilePath:   f.Name(),
+				LineNumber: -1,
+				Record:     record,
+			}
+			return result, nil
 		}
 	}
 
 	return nil, errors.Verify("no complete record found")
+}
+
+func takeLastLine(tail []byte, fullRead bool) ([]byte, []byte, bool) {
+	if len(tail) == 0 {
+		return nil, nil, false
+	}
+	end := len(tail)
+	for end > 0 && (tail[end-1] == '\n' || tail[end-1] == '\r') {
+		end--
+	}
+	if end == 0 {
+		return nil, nil, false
+	}
+	idx := bytes.LastIndexByte(tail[:end], '\n')
+	if idx == -1 {
+		if !fullRead {
+			return nil, nil, false
+		}
+		return tail[:end], nil, true
+	}
+	return tail[idx+1 : end], tail[:idx+1], true
 }
 
 // DownloadLogs downloads logs based on categories and conditions
