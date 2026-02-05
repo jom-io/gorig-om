@@ -8,7 +8,8 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e
-	github.com/jom-io/gorig v0.0.52
+	github.com/jom-io/gorig v0.0.53-0.20260205102704-ca4d73b27ac3
+	github.com/lionsoul2014/ip2region v3.13.0+incompatible
 	github.com/rs/xid v1.5.0
 	github.com/shirou/gopsutil/v4 v4.25.4
 	github.com/spf13/cast v1.6.0
@@ -16,8 +17,6 @@ require (
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.22.0
 )
-
-replace github.com/jom-io/gorig => ../gorig
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
@@ -49,9 +48,11 @@ require (
 	github.com/klauspost/compress v1.17.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20260125112842-ba2c9ec11917 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
