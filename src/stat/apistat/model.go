@@ -8,9 +8,9 @@ type StatusAgg struct {
 
 // ApiLatencyStat stores per-minute latency aggregation for a method+uri.
 type ApiLatencyStat struct {
-	At              int64  `json:"at" idx:"at"`                      // minute bucket, unix seconds
-	Method          string `json:"method" idx_group:"method_uri"`    // HTTP method
-	URI             string `json:"uri" idx_group:"method_uri"`       // normalized path
+	At              int64  `json:"at" idx:"at" idx_group:"at_method_uri"` // minute bucket, unix seconds
+	Method          string `json:"method" idx_group:"at_method_uri"`      // HTTP method
+	URI             string `json:"uri" idx_group:"at_method_uri"`         // normalized path
 	Count           int64  `json:"count"`      // total requests
 	CountSlow       int64  `json:"countSlow"`  // requests over slow threshold
 	SumLatency      int64  `json:"sumLatency"` // total latency ms
