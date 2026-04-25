@@ -3,15 +3,18 @@ package apistat
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/jom-io/gorig-om/src/logtool"
 	"github.com/jom-io/gorig/cache"
 	"github.com/jom-io/gorig/cronx"
 	"github.com/jom-io/gorig/utils/errors"
 	"github.com/jom-io/gorig/utils/logger"
 	"go.uber.org/zap"
-	"strconv"
-	"strings"
-	"time"
 )
 
 var (
@@ -27,15 +30,19 @@ const (
 var summaryExcludeMethods = []string{"OPTIONS", "HEAD", "PATCH"}
 
 type Serv struct {
-	storage cache.Pager[ApiLatencyStat]
-	meta    cache.Pager[ApiLatencyMeta]
+	storage     cache.Pager[ApiLatencyStat]
+	storageHour cache.Pager[ApiLatencyStat]
+	meta        cache.Pager[ApiLatencyMeta]
+	rollupMu    sync.Mutex
+	lastRollup  int64
 }
 
 func S() *Serv {
 	if statServ == nil {
 		statServ = &Serv{
-			storage: cache.NewPager[ApiLatencyStat](context.Background(), cache.Sqlite, "api_latency_stat"),
-			meta:    cache.NewPager[ApiLatencyMeta](context.Background(), cache.Sqlite, "api_latency_meta"),
+			storage:     cache.NewPager[ApiLatencyStat](context.Background(), cache.Sqlite, "api_latency_stat"),
+			storageHour: cache.NewPager[ApiLatencyStat](context.Background(), cache.Sqlite, "api_latency_stat_hour"),
+			meta:        cache.NewPager[ApiLatencyMeta](context.Background(), cache.Sqlite, "api_latency_meta"),
 		}
 	}
 	return statServ
@@ -242,9 +249,41 @@ func (s *Serv) Collect(ctx context.Context) {
 }
 
 func (s *Serv) Clear(ctx context.Context) error {
-	expiration := time.Now().Add(-latMaxAge).Unix()
-	if err := s.storage.Delete(map[string]any{"at": map[string]any{"$lt": expiration}}); err != nil {
-		return err
+	now := time.Now()
+	currentHourStart := now.Truncate(time.Hour).Unix()
+
+	if s.storageHour != nil {
+		s.rollupMu.Lock()
+		if s.lastRollup != currentHourStart {
+			startHour, endHour, ok, err := s.rollupWindow(currentHourStart)
+			if err != nil {
+				s.rollupMu.Unlock()
+				return err
+			}
+			if ok {
+				if err := s.rollupHours(ctx, startHour, endHour); err != nil {
+					s.rollupMu.Unlock()
+					return err
+				}
+			}
+			if err := s.storage.Delete(map[string]any{"at": map[string]any{"$lt": currentHourStart}}); err != nil {
+				s.rollupMu.Unlock()
+				return err
+			}
+			s.lastRollup = currentHourStart
+		}
+		s.rollupMu.Unlock()
+	} else {
+		if err := s.storage.Delete(map[string]any{"at": map[string]any{"$lt": currentHourStart}}); err != nil {
+			return err
+		}
+	}
+
+	expiration := now.Add(-latMaxAge).Unix()
+	if s.storageHour != nil {
+		if err := s.storageHour.Delete(map[string]any{"at": map[string]any{"$lt": expiration}}); err != nil {
+			return err
+		}
 	}
 	if err := s.meta.Delete(map[string]any{"lastAt": map[string]any{"$lt": expiration}}); err != nil {
 		return err
@@ -351,60 +390,12 @@ func (s *Serv) Summary(ctx context.Context, start, end int64, slowMs int64) (*Ap
 	}, nil
 }
 
-func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, methods, negMethods []string, uriPrefix, uriLike string, statuses []string, sortBy string, asc bool) (*cache.PageCache[ApiLatencyRank], *errors.Error) {
+func latencyGroupFields() []string {
+	return []string{"method", "uri"}
+}
 
-	if start == 0 || end == 0 || start > end {
-		return nil, errors.Verify("invalid time range")
-	}
-	if size <= 0 {
-		size = 10
-	}
-	if page <= 0 {
-		page = 1
-	}
-	cond := map[string]any{
-		"at": map[string]any{
-			"$gte": start,
-			"$lte": end,
-		},
-	}
-	if len(methods) == 1 {
-		cond["method"] = strings.ToUpper(methods[0])
-	} else if len(methods) > 1 {
-		var vals []string
-		for _, m := range methods {
-			if strings.TrimSpace(m) == "" {
-				continue
-			}
-			vals = append(vals, strings.ToUpper(m))
-		}
-		if len(vals) > 0 {
-			cond["method"] = map[string]any{"$in": vals}
-		}
-	}
-	if len(negMethods) == 1 {
-		cond["method"] = map[string]any{"$ne": strings.ToUpper(negMethods[0])}
-	} else if len(negMethods) > 1 {
-		var vals []string
-		for _, m := range negMethods {
-			if strings.TrimSpace(m) == "" {
-				continue
-			}
-			vals = append(vals, strings.ToUpper(m))
-		}
-		if len(vals) > 0 {
-			cond["method"] = map[string]any{"$nin": vals}
-		}
-	}
-
-	if strings.TrimSpace(uriLike) != "" {
-		cond["uri"] = map[string]any{"$like": "%" + uriLike + "%"}
-	} else if strings.TrimSpace(uriPrefix) != "" {
-		cond["uri"] = map[string]any{"$like": uriPrefix + "%"}
-	}
-
-	groupFields := []string{"method", "uri"}
-	aggFields := []cache.AggField{
+func latencyAggFields() []cache.AggField {
+	return []cache.AggField{
 		{Field: "count", Agg: cache.AggSum, Alias: "cnt"},
 		{Field: "sumLatency", Agg: cache.AggSum, Alias: "sum"},
 		{Field: "maxLatency", Agg: cache.AggMax, Alias: "max"},
@@ -421,6 +412,360 @@ func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, 
 		{Field: "sumLatencyOther", Agg: cache.AggSum, Alias: "so"},
 		{Field: "maxLatencyOther", Agg: cache.AggMax, Alias: "mo"},
 	}
+}
+
+func (s *Serv) minMaxAt(storage cache.Pager[ApiLatencyStat]) (int64, int64, bool, error) {
+	if storage == nil {
+		return 0, 0, false, nil
+	}
+	minPage, err := storage.Find(1, 1, nil, cache.PageSorterAsc("at"))
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if minPage == nil || len(minPage.Items) == 0 {
+		return 0, 0, false, nil
+	}
+	maxPage, err := storage.Find(1, 1, nil, cache.PageSorterDesc("at"))
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if maxPage == nil || len(maxPage.Items) == 0 {
+		return 0, 0, false, nil
+	}
+	return minPage.Items[0].At, maxPage.Items[0].At, true, nil
+}
+
+func (s *Serv) maxAt(storage cache.Pager[ApiLatencyStat]) (int64, bool, error) {
+	if storage == nil {
+		return 0, false, nil
+	}
+	maxPage, err := storage.Find(1, 1, nil, cache.PageSorterDesc("at"))
+	if err != nil {
+		return 0, false, err
+	}
+	if maxPage == nil || len(maxPage.Items) == 0 {
+		return 0, false, nil
+	}
+	return maxPage.Items[0].At, true, nil
+}
+
+type latencyAgg struct {
+	Method string
+	URI    string
+	Cnt    int64
+	Sum    int64
+	Max    int64
+	C2     int64
+	C4     int64
+	C5     int64
+	Co     int64
+}
+
+func mergeLatencyItems(dst map[string]*latencyAgg, items []*cache.PageGroupItem) {
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		method := item.Group["method"]
+		uri := item.Group["uri"]
+		if method == "" || uri == "" {
+			continue
+		}
+		key := method + "|" + uri
+		agg, ok := dst[key]
+		if !ok {
+			agg = &latencyAgg{Method: method, URI: uri}
+			dst[key] = agg
+		}
+		cnt := int64(item.Value["cnt"])
+		sum := int64(item.Value["sum"])
+		maxv := int64(item.Value["max"])
+		agg.Cnt += cnt
+		agg.Sum += sum
+		if maxv > agg.Max {
+			agg.Max = maxv
+		}
+		agg.C2 += int64(item.Value["c2"])
+		agg.C4 += int64(item.Value["c4"])
+		agg.C5 += int64(item.Value["c5"])
+		agg.Co += int64(item.Value["co"])
+	}
+}
+
+func buildLatencyRanksFromAgg(aggs map[string]*latencyAgg, statusSet map[string]struct{}) []*ApiLatencyRank {
+	result := make([]*ApiLatencyRank, 0, len(aggs))
+	for _, agg := range aggs {
+		if agg == nil || agg.Cnt == 0 {
+			continue
+		}
+		if len(statusSet) > 0 {
+			match := false
+			if _, ok := statusSet["2xx"]; ok && agg.C2 > 0 {
+				match = true
+			}
+			if _, ok := statusSet["4xx"]; ok && agg.C4 > 0 {
+				match = true
+			}
+			if _, ok := statusSet["5xx"]; ok && agg.C5 > 0 {
+				match = true
+			}
+			if _, ok := statusSet["other"]; ok && agg.Co > 0 {
+				match = true
+			}
+			if !match {
+				continue
+			}
+		}
+		avg := agg.Sum / agg.Cnt
+		r := &ApiLatencyRank{
+			Method:     agg.Method,
+			URI:        agg.URI,
+			Count:      agg.Cnt,
+			AvgLatency: avg,
+			MaxLatency: agg.Max,
+			Count2xx:   agg.C2,
+			Count4xx:   agg.C4,
+			Count5xx:   agg.C5,
+			CountOther: agg.Co,
+		}
+		if agg.Cnt > 0 {
+			r.SuccessRate = float64(agg.C2) / float64(agg.Cnt)
+		}
+		result = append(result, r)
+	}
+	return result
+}
+
+func sortLatencyRanks(items []*ApiLatencyRank, sortBy string, asc bool) {
+	if len(items) == 0 {
+		return
+	}
+	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
+	if sortBy == "" {
+		sortBy = "avg"
+	}
+	less := func(i, j int) bool {
+		a := items[i]
+		b := items[j]
+		switch sortBy {
+		case "max":
+			if asc {
+				return a.MaxLatency < b.MaxLatency
+			}
+			return a.MaxLatency > b.MaxLatency
+		case "count", "cnt":
+			if asc {
+				return a.Count < b.Count
+			}
+			return a.Count > b.Count
+		case "2xx":
+			if asc {
+				return a.Count2xx < b.Count2xx
+			}
+			return a.Count2xx > b.Count2xx
+		case "4xx":
+			if asc {
+				return a.Count4xx < b.Count4xx
+			}
+			return a.Count4xx > b.Count4xx
+		case "5xx":
+			if asc {
+				return a.Count5xx < b.Count5xx
+			}
+			return a.Count5xx > b.Count5xx
+		case "other":
+			if asc {
+				return a.CountOther < b.CountOther
+			}
+			return a.CountOther > b.CountOther
+		case "success", "successrate":
+			if asc {
+				return a.SuccessRate < b.SuccessRate
+			}
+			return a.SuccessRate > b.SuccessRate
+		default:
+			if asc {
+				return a.AvgLatency < b.AvgLatency
+			}
+			return a.AvgLatency > b.AvgLatency
+		}
+	}
+	sort.Slice(items, less)
+}
+
+func (s *Serv) rollupWindow(currentHourStart int64) (int64, int64, bool, error) {
+	if s.storageHour == nil || s.storage == nil {
+		return 0, 0, false, nil
+	}
+	if currentHourStart <= 0 {
+		return 0, 0, false, nil
+	}
+	endHour := currentHourStart - 3600
+	if endHour <= 0 {
+		return 0, 0, false, nil
+	}
+
+	minMinute, maxMinute, ok, err := s.minMaxAt(s.storage)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if !ok {
+		return 0, 0, false, nil
+	}
+	maxMinuteHour := (maxMinute / 3600) * 3600
+	if maxMinuteHour < endHour {
+		endHour = maxMinuteHour
+	}
+	if endHour <= 0 {
+		return 0, 0, false, nil
+	}
+
+	var startHour int64
+	if s.lastRollup > 0 {
+		startHour = s.lastRollup
+	} else {
+		minMinuteHour := (minMinute / 3600) * 3600
+		startHour = minMinuteHour
+		if maxHour, okHour, err := s.maxAt(s.storageHour); err == nil && okHour {
+			if maxHour+3600 > startHour {
+				startHour = maxHour + 3600
+			}
+		}
+	}
+	if startHour <= 0 || startHour > endHour {
+		return 0, 0, false, nil
+	}
+	return startHour, endHour, true, nil
+}
+
+func (s *Serv) rollupHours(ctx context.Context, startHour, endHour int64) error {
+	if startHour <= 0 || endHour < startHour {
+		return nil
+	}
+	for h := startHour; h <= endHour; h += 3600 {
+		if err := s.rollupHour(ctx, h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Serv) rollupHour(ctx context.Context, hourStart int64) error {
+	if s.storageHour == nil {
+		return nil
+	}
+	hourEnd := hourStart + 3600
+	count, err := s.storage.Count(map[string]any{
+		"at": map[string]any{
+			"$gte": hourStart,
+			"$lt":  hourEnd,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+
+	groupFields := latencyGroupFields()
+	aggFields := latencyAggFields()
+	grouped, err := s.storage.GroupByFields(map[string]any{
+		"at": map[string]any{
+			"$gte": hourStart,
+			"$lt":  hourEnd,
+		},
+	}, groupFields, aggFields, 1, 0)
+	if err != nil {
+		return err
+	}
+
+	if err := s.storageHour.Delete(map[string]any{"at": hourStart}); err != nil {
+		return err
+	}
+
+	for _, item := range grouped.Items {
+		method := item.Group["method"]
+		uri := item.Group["uri"]
+		if method == "" || uri == "" {
+			continue
+		}
+		stat := ApiLatencyStat{
+			At:              hourStart,
+			Method:          method,
+			URI:             uri,
+			Count:           int64(item.Value["cnt"]),
+			SumLatency:      int64(item.Value["sum"]),
+			MaxLatency:      int64(item.Value["max"]),
+			Count2xx:        int64(item.Value["c2"]),
+			SumLatency2xx:   int64(item.Value["s2"]),
+			MaxLatency2xx:   int64(item.Value["m2"]),
+			Count4xx:        int64(item.Value["c4"]),
+			SumLatency4xx:   int64(item.Value["s4"]),
+			MaxLatency4xx:   int64(item.Value["m4"]),
+			Count5xx:        int64(item.Value["c5"]),
+			SumLatency5xx:   int64(item.Value["s5"]),
+			MaxLatency5xx:   int64(item.Value["m5"]),
+			CountOther:      int64(item.Value["co"]),
+			SumLatencyOther: int64(item.Value["so"]),
+			MaxLatencyOther: int64(item.Value["mo"]),
+		}
+		if err := s.storageHour.Put(stat); err != nil {
+			logger.Error(ctx, "save api latency hour stat failed", zap.Error(err), zap.String("key", method+"|"+uri))
+		}
+	}
+	return nil
+}
+
+func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, methods, negMethods []string, uriPrefix, uriLike string, statuses []string, sortBy string, asc bool) (*cache.PageCache[ApiLatencyRank], *errors.Error) {
+
+	if start == 0 || end == 0 || start > end {
+		return nil, errors.Verify("invalid time range")
+	}
+	if size <= 0 {
+		size = 10
+	}
+	if page <= 0 {
+		page = 1
+	}
+	baseCond := map[string]any{}
+	if len(methods) == 1 {
+		baseCond["method"] = strings.ToUpper(methods[0])
+	} else if len(methods) > 1 {
+		var vals []string
+		for _, m := range methods {
+			if strings.TrimSpace(m) == "" {
+				continue
+			}
+			vals = append(vals, strings.ToUpper(m))
+		}
+		if len(vals) > 0 {
+			baseCond["method"] = map[string]any{"$in": vals}
+		}
+	}
+	if len(negMethods) == 1 {
+		baseCond["method"] = map[string]any{"$ne": strings.ToUpper(negMethods[0])}
+	} else if len(negMethods) > 1 {
+		var vals []string
+		for _, m := range negMethods {
+			if strings.TrimSpace(m) == "" {
+				continue
+			}
+			vals = append(vals, strings.ToUpper(m))
+		}
+		if len(vals) > 0 {
+			baseCond["method"] = map[string]any{"$nin": vals}
+		}
+	}
+
+	if strings.TrimSpace(uriLike) != "" {
+		baseCond["uri"] = map[string]any{"$like": "%" + uriLike + "%"}
+	} else if strings.TrimSpace(uriPrefix) != "" {
+		baseCond["uri"] = map[string]any{"$like": uriPrefix + "%"}
+	}
+
+	groupFields := latencyGroupFields()
+	aggFields := latencyAggFields()
 
 	sorter, errSort := buildLatencySorter(sortBy, asc)
 	if errSort != nil {
@@ -428,8 +773,8 @@ func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, 
 	}
 
 	statusSet := buildStatusSet(statuses)
+	var havingParts []string
 	if len(statusSet) > 0 {
-		var havingParts []string
 		if _, ok := statusSet["2xx"]; ok {
 			havingParts = append(havingParts, "c2 > 0")
 		}
@@ -450,42 +795,137 @@ func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, 
 				Items: []*ApiLatencyRank{},
 			}, nil
 		}
-		cond["$having"] = "(" + strings.Join(havingParts, " OR ") + ")"
 	}
 
-	grouped, err := s.storage.GroupByFields(cond, groupFields, aggFields, page, size, sorter)
-	if err != nil {
-		logger.Error(ctx, "GroupByFields latency failed", zap.Error(err))
-		return nil, errors.Sys("GroupByFields latency failed", err)
-	}
+	now := time.Now().Unix()
+	currentHourStart := time.Now().Truncate(time.Hour).Unix()
+	useMinuteOnly := s.storageHour == nil || (start >= currentHourStart && end <= now)
+	var result []*ApiLatencyRank
+	var total int64
 
-	result := make([]*ApiLatencyRank, 0, len(grouped.Items))
-	for _, item := range grouped.Items {
-		totalCount := int64(item.Value["cnt"])
-		if totalCount == 0 {
-			continue
+	if useMinuteOnly {
+		cond := make(map[string]any, len(baseCond)+2)
+		for k, v := range baseCond {
+			cond[k] = v
+		}
+		cond["at"] = map[string]any{
+			"$gte": start,
+			"$lte": end,
+		}
+		if len(havingParts) > 0 {
+			cond["$having"] = "(" + strings.Join(havingParts, " OR ") + ")"
 		}
 
-		totalSum := int64(item.Value["sum"])
-		avg := totalSum / totalCount
-		count2xx := int64(item.Value["c2"])
-		count4xx := int64(item.Value["c4"])
-		count5xx := int64(item.Value["c5"])
-		r := &ApiLatencyRank{
-			Method:     item.Group["method"],
-			URI:        item.Group["uri"],
-			Count:      totalCount,
-			AvgLatency: avg,
-			MaxLatency: int64(item.Value["max"]),
-			Count2xx:   count2xx,
-			Count4xx:   count4xx,
-			Count5xx:   count5xx,
-			CountOther: int64(item.Value["co"]),
+		grouped, err := s.storage.GroupByFields(cond, groupFields, aggFields, page, size, sorter)
+		if err != nil {
+			logger.Error(ctx, "GroupByFields latency failed", zap.Error(err))
+			return nil, errors.Sys("GroupByFields latency failed", err)
 		}
-		if totalCount > 0 {
-			r.SuccessRate = float64(count2xx) / float64(totalCount)
+
+		result = make([]*ApiLatencyRank, 0, len(grouped.Items))
+		for _, item := range grouped.Items {
+			totalCount := int64(item.Value["cnt"])
+			if totalCount == 0 {
+				continue
+			}
+			totalSum := int64(item.Value["sum"])
+			avg := totalSum / totalCount
+			count2xx := int64(item.Value["c2"])
+			count4xx := int64(item.Value["c4"])
+			count5xx := int64(item.Value["c5"])
+			r := &ApiLatencyRank{
+				Method:     item.Group["method"],
+				URI:        item.Group["uri"],
+				Count:      totalCount,
+				AvgLatency: avg,
+				MaxLatency: int64(item.Value["max"]),
+				Count2xx:   count2xx,
+				Count4xx:   count4xx,
+				Count5xx:   count5xx,
+				CountOther: int64(item.Value["co"]),
+			}
+			if totalCount > 0 {
+				r.SuccessRate = float64(count2xx) / float64(totalCount)
+			}
+			result = append(result, r)
 		}
-		result = append(result, r)
+		total = grouped.Total
+	} else {
+		aggs := make(map[string]*latencyAgg)
+		hourStart := (start / 3600) * 3600
+		if end < currentHourStart {
+			cond := make(map[string]any, len(baseCond)+1)
+			for k, v := range baseCond {
+				cond[k] = v
+			}
+			cond["at"] = map[string]any{
+				"$gte": hourStart,
+				"$lte": end,
+			}
+			hourRes, err := s.storageHour.GroupByFields(cond, groupFields, aggFields, 1, 0)
+			if err != nil {
+				logger.Error(ctx, "GroupByFields latency failed", zap.Error(err))
+				return nil, errors.Sys("GroupByFields latency failed", err)
+			}
+			mergeLatencyItems(aggs, hourRes.Items)
+		} else {
+			if start < currentHourStart {
+				cond := make(map[string]any, len(baseCond)+1)
+				for k, v := range baseCond {
+					cond[k] = v
+				}
+				cond["at"] = map[string]any{
+					"$gte": hourStart,
+					"$lt":  currentHourStart,
+				}
+				hourRes, err := s.storageHour.GroupByFields(cond, groupFields, aggFields, 1, 0)
+				if err != nil {
+					logger.Error(ctx, "GroupByFields latency failed", zap.Error(err))
+					return nil, errors.Sys("GroupByFields latency failed", err)
+				}
+				mergeLatencyItems(aggs, hourRes.Items)
+			}
+
+			tailStart := currentHourStart
+			if start > tailStart {
+				tailStart = start
+			}
+			tailEnd := end
+			if tailEnd > now {
+				tailEnd = now
+			}
+			if tailStart <= tailEnd {
+				cond := make(map[string]any, len(baseCond)+1)
+				for k, v := range baseCond {
+					cond[k] = v
+				}
+				cond["at"] = map[string]any{
+					"$gte": tailStart,
+					"$lte": tailEnd,
+				}
+				tail, err := s.storage.GroupByFields(cond, groupFields, aggFields, 1, 0)
+				if err != nil {
+					logger.Error(ctx, "GroupByFields latency failed", zap.Error(err))
+					return nil, errors.Sys("GroupByFields latency failed", err)
+				}
+				mergeLatencyItems(aggs, tail.Items)
+			}
+		}
+
+		result = buildLatencyRanksFromAgg(aggs, statusSet)
+		sortLatencyRanks(result, sortBy, asc)
+		total = int64(len(result))
+
+		startIdx := (page - 1) * size
+		if startIdx >= int64(len(result)) {
+			result = []*ApiLatencyRank{}
+		} else {
+			endIdx := startIdx + size
+			if endIdx > int64(len(result)) {
+				endIdx = int64(len(result))
+			}
+			result = result[startIdx:endIdx]
+		}
 	}
 
 	for _, r := range result {
@@ -499,7 +939,7 @@ func (s *Serv) TopPage(ctx context.Context, start, end int64, page, size int64, 
 	}
 
 	return &cache.PageCache[ApiLatencyRank]{
-		Total: grouped.Total,
+		Total: total,
 		Page:  page,
 		Size:  size,
 		Items: result,

@@ -224,6 +224,95 @@ func TestApiStatWorkflow(t *testing.T) {
 	})
 }
 
+func TestApiStatTopPageHourMinute(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(origDir)
+	})
+
+	s := newApiStatServ(t, "api_latency_stat_hour_minute")
+	storage := cache.NewPager[apistat.ApiLatencyStat](context.Background(), cache.Sqlite, "api_latency_stat_hour_minute")
+
+	now := time.Now().Truncate(time.Minute)
+	currentHourStart := now.Truncate(time.Hour).Unix()
+	prevHourStart := currentHourStart - 3600
+
+	uri := "/__apistat_hour__/alpha"
+
+	prevStat := apistat.ApiLatencyStat{
+		At:            prevHourStart + 120,
+		Method:        "GET",
+		URI:           uri,
+		Count:         2,
+		SumLatency:    200,
+		MaxLatency:    150,
+		Count2xx:      2,
+		SumLatency2xx: 200,
+		MaxLatency2xx: 150,
+	}
+	if err := storage.Put(prevStat); err != nil {
+		t.Fatalf("put prevStat failed: %v", err)
+	}
+
+	curStat := apistat.ApiLatencyStat{
+		At:            now.Unix(),
+		Method:        "GET",
+		URI:           uri,
+		Count:         3,
+		SumLatency:    300,
+		MaxLatency:    120,
+		Count2xx:      1,
+		SumLatency2xx: 100,
+		MaxLatency2xx: 100,
+		Count5xx:      2,
+		SumLatency5xx: 200,
+		MaxLatency5xx: 120,
+	}
+	if err := storage.Put(curStat); err != nil {
+		t.Fatalf("put curStat failed: %v", err)
+	}
+
+	if err := s.Clear(context.Background()); err != nil {
+		t.Fatalf("Clear failed: %v", err)
+	}
+
+	start := currentHourStart - 1800
+	end := now.Unix()
+	page, topErr := s.TopPage(context.Background(), start, end, 1, 10, nil, nil, "/__apistat_hour__", "", nil, "count", false)
+	if topErr != nil {
+		t.Fatalf("TopPage hour+minute failed: %v", topErr)
+	}
+	if page.Total < 1 || len(page.Items) == 0 {
+		t.Fatalf("TopPage hour+minute returned empty result")
+	}
+	if page.Items[0].Count != 5 || page.Items[0].Count2xx != 3 || page.Items[0].Count5xx != 2 {
+		t.Fatalf("TopPage hour+minute unexpected counts: %+v", page.Items[0])
+	}
+	if page.Items[0].MaxLatency != 150 {
+		t.Fatalf("TopPage hour+minute max latency mismatch: %d", page.Items[0].MaxLatency)
+	}
+
+	start2 := currentHourStart
+	end2 := now.Unix()
+	page2, topErr2 := s.TopPage(context.Background(), start2, end2, 1, 10, nil, nil, "/__apistat_hour__", "", nil, "count", false)
+	if topErr2 != nil {
+		t.Fatalf("TopPage minute-only failed: %v", topErr2)
+	}
+	if page2.Total < 1 || len(page2.Items) == 0 {
+		t.Fatalf("TopPage minute-only returned empty result")
+	}
+	if page2.Items[0].Count != 3 || page2.Items[0].Count2xx != 1 || page2.Items[0].Count5xx != 2 {
+		t.Fatalf("TopPage minute-only unexpected counts: %+v", page2.Items[0])
+	}
+}
+
 func TestApiStatCollectCounts4xx(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, err := os.Getwd()
@@ -411,10 +500,12 @@ func newApiStatServ(t *testing.T, storageName string) *apistat.Serv {
 	t.Helper()
 	s := &apistat.Serv{}
 	storage := cache.NewPager[apistat.ApiLatencyStat](context.Background(), cache.Sqlite, storageName)
+	storageHour := cache.NewPager[apistat.ApiLatencyStat](context.Background(), cache.Sqlite, storageName+"_hour")
 	meta := cache.NewPager[apistat.ApiLatencyMeta](context.Background(), cache.Sqlite, storageName+"_meta")
 
 	val := reflect.ValueOf(s).Elem()
 	setUnexportedField(val.FieldByName("storage"), storage)
+	setUnexportedField(val.FieldByName("storageHour"), storageHour)
 	setUnexportedField(val.FieldByName("meta"), meta)
 	return s
 }

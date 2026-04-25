@@ -228,7 +228,8 @@ func searchLogsWithTraceTimeWindow(opts SearchOptions) ([]MatchedRecord, *errors
 	traceID := strings.TrimSpace(opts.TraceID)
 	id, err := xid.FromString(traceID)
 	if err != nil {
-		return nil, errors.Verify("invalid traceID")
+		// skip time window optimization if trace ID is not valid
+		return searchLogsOnce(opts)
 	}
 
 	baseTime := id.Time().Local()
